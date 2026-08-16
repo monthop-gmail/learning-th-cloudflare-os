@@ -185,6 +185,15 @@ async function handle(msg) {
   fail(id, -32601, `ไม่รองรับเมธอด "${method}"`);
 }
 
+// อุ่นเครื่องทันทีที่สตาร์ต ไม่ต้องรอ tool call แรก
+//
+// ครั้งแรกที่แตะ Durable Object ของผู้ใช้หลัง Cloudflare OS รีสตาร์ต ใช้เวลาได้ถึง ~30 วินาที
+// (วัดได้จริง: login() 32s ส่วนขั้นที่เหลือรวมกันไม่ถึง 2s) ถ้าปล่อยให้ไปเกิดตอน tool call แรก
+// MCP client จะเห็นเป็นอาการค้าง — ย้ายมาให้เกิดตอนสตาร์ตแทน
+session().catch(err => {
+  process.stderr.write(`cfos-context-mcp: อุ่นเครื่องไม่สำเร็จ (จะลองใหม่ตอนเรียก tool): ${err}\n`);
+});
+
 const rl = createInterface({ input: process.stdin });
 rl.on("line", line => {
   if (!line.trim()) return;
