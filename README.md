@@ -1,7 +1,7 @@
 # เรียน Cloudflare OS แบบลงมือทำ (ฉบับภาษาไทย)
 
 คู่มือเรียน [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) ภาษาไทย แบบลงมือทำ
-บทที่ 0–14 พร้อมสคริปต์และ fixture ที่รันได้จริง
+บทที่ 0–15 พร้อมสคริปต์และ fixture ที่รันได้จริง
 
 > ⚠️ repo นี้ **ไม่ใช่ของ Cloudflare** และไม่ได้รับการรับรองจาก Cloudflare
 > เป็นบันทึกการเรียนที่เขียนขึ้นเพื่อให้คนอื่นเดินตามได้โดยไม่ต้องลองผิดลองถูกซ้ำ
@@ -58,7 +58,8 @@ git clone https://github.com/monthop-gmail/learning-th-cloudflare-os.git
 | [11](#บทที่-11-ลอง-agent-จริง--ที่อ่านมาสิบบทตรงไหม) | ลอง agent จริง — ที่อ่านมาสิบบทตรงไหม | **ต้องมี** | 30 นาที |
 | [12](#บทที่-12-เอามาใช้กับ-github-workflow-เดิมของทีมได้ไหม) | เอามาใช้กับ GitHub workflow เดิมของทีมได้ไหม | ไม่ | 30 นาที |
 | [13](#บทที่-13-สรุปเพื่อตัดสินใจ) | **สรุปเพื่อตัดสินใจ** — สำหรับคนที่ไม่มีเวลาอ่าน 12 บท | ไม่ | 10 นาที |
-| [14](#บทที่-14-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
+| [14](#บทที่-14-ต่อ-coding-agent-ภายนอกเข้ากับ-cloudflare-os) | ต่อ coding agent ภายนอกเข้ากับ Cloudflare OS (MCP) | ไม่ | 45 นาที |
+| [15](#บทที่-15-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
 
 > 💡 **มีแค่บทที่ 11 บทเดียวที่ต้องใช้ API key ของ LLM** ตั้งใจออกแบบมาแบบนั้น
 > เพราะส่วนที่น่าเรียนที่สุดของ repo นี้คือสถาปัตยกรรม ไม่ใช่ตัวโมเดล
@@ -2245,7 +2246,192 @@ $0.28 ต่อ gadget หนึ่งตัวด้วยโมเดลเล
 
 ---
 
-## บทที่ 14: ไปต่อทางไหน
+## บทที่ 14: ต่อ coding agent ภายนอกเข้ากับ Cloudflare OS
+
+บทที่ 12 สรุปว่า Cloudflare OS ไม่ได้มาแทน coding agent ของทีม — มันทำคนละอย่าง
+บทนี้ตอบคำถามถัดมา: **แล้วจะให้สองอย่างนี้ทำงานร่วมกันยังไง**
+
+แนวคิด: ใช้ Cloudflare OS เป็น **single source ของบริบทบริษัท** แล้วให้ coding agent
+ทุกตัวในทีม (Claude Code, Cursor, ฯลฯ) อ่านผ่าน MCP — แก้ที่เดียว ทุกตัวเห็นเหมือนกัน
+
+```
+coding agent ──MCP(stdio)──► cfos-context ──Cap'n Web──► Cloudflare OS
+                                                             │
+                                                     Context Library
+```
+
+ต้นแบบอยู่ที่ `packages/integration-tests/cfos-context-mcp/`
+
+---
+
+### ทำไมเลือกทิศทางนี้
+
+Cloudflare OS มีทางเข้าจากภายนอกสองทาง:
+
+| ทาง | ทำอะไรได้ | ความเสี่ยง |
+|---|---|---|
+| `ExternalMessageGateway` | ยิง prompt เข้าไปให้ agent ข้างในทำงาน | **สูง** |
+| `/api` (Cap'n Web) | ทำได้ทุกอย่างที่ UI ทำได้ | ตามสิทธิ์ของบัญชีที่ใช้ |
+
+ทางแรกดูตรงจุดกว่า แต่อ่านคอมเมนต์ของเขาเองก่อน:
+
+> *"The backend **trusts the gateway**: supplying this email grants access as that account."*
+
+แปลว่า gateway ที่คุณเขียน **กลายเป็นขอบเขตความปลอดภัย** ใครยิงเข้ามาได้ = สวมสิทธิ์เป็นใครก็ได้
+
+ทิศ "อ่านบริบทอย่างเดียว" จึงคุ้มกว่ามากสำหรับการเริ่มต้น — ความเสี่ยงต่ำ
+และพิสูจน์คุณค่าของ single source ได้เร็ว
+
+---
+
+### 🗺️ ทางเข้า Context Library จากภายนอก (ไม่มีในเอกสาร)
+
+ส่วนที่ยากที่สุดของบทนี้คือ **หาว่าจะเอื้อมถึง Context Library ยังไง** — ไม่มีเอกสารบอก
+ลำดับที่ใช้ได้จริงคือ:
+
+```js
+await api.login(USER, hash) ?? await api.createAccount(USER, name, hash)
+  → api.authenticate(token)
+  → auth.provisionAmbientAccount("context")        // auto-provision ไม่ต้อง OAuth
+  → auth.newGadget()                                // read session ต้องเปิดจาก workspace
+  → overseer.listObserverRequirements("build")      // หา vendorId === "context"
+  → overseer.getGatekeeperById(id)
+  → gk.openSession()                                // ได้ read session
+```
+
+จากนั้น session มีสามเมธอด — พอดีกับ MCP tool สามตัว:
+
+```js
+session.list({ collectionId?, path? })          // มี collection/เอกสารอะไรบ้าง
+session.search(query, { collectionId?, limit? }) // ค้นข้อความเต็ม (ไทยก็ได้)
+session.read(docId)                              // อ่านเอกสารเต็ม
+```
+
+**ฝั่งเขียน** อยู่คนละที่:
+
+```js
+const { ui } = await auth.getGatekeeperApp("context");   // ui = ContextApi
+await ui.createContextCollection(title, description, "public");
+await ui.putContextDocument(collectionId, path, { description, body });
+```
+
+### 🔑 public vs private — จุดชี้ขาดของโมเดล single source
+
+| visibility | ใครเห็น | ใครสร้างได้ |
+|---|---|---|
+| `private` | เจ้าของบัญชีคนเดียว | ใครก็ได้ |
+| `public` | **ทุกคนใน deployment** เปิดให้อัตโนมัติ | **เฉพาะ deployment admin** |
+
+**ถ้าจะทำ single source ของทีม ต้องใช้ `public`** — ไม่งั้น MCP server (ซึ่งรันด้วยบัญชีบริการ
+คนละใบกับคุณ) จะมองไม่เห็นอะไรเลย
+
+ผมพลาดข้อนี้รอบแรก: สร้าง collection เป็น `private` ด้วยบัญชีชั่วคราว แล้ว MCP server
+อ่านได้ `{"entries":[]}` — ถูกต้องตามสเปกทุกประการ แต่ไม่ใช่สิ่งที่ต้องการ
+
+---
+
+### เขียน MCP server เอง (ไม่ยาวอย่างที่คิด)
+
+repo มีแต่ `@modelcontextprotocol/client` — **ไม่มี SDK ฝั่ง server** แต่โปรโตคอลส่วนที่ใช้จริง
+มีแค่ JSON-RPC 2.0 บน stdio สามเมธอด:
+
+| เมธอด | ตอบอะไร |
+|---|---|
+| `initialize` | `{protocolVersion, capabilities:{tools:{}}, serverInfo}` |
+| `tools/list` | รายการ `{name, description, inputSchema}` |
+| `tools/call` | `{content:[{type:"text", text}]}` |
+
+บวก `notifications/initialized` ที่ไม่มี `id` — **ห้ามตอบ** ไม่งั้น client จะงง
+
+จุดที่ควรทำตาม:
+
+- **สะท้อน `protocolVersion` ที่ client ขอมา** แทนที่จะฮาร์ดโค้ด
+- **tool ที่พังให้ตอบเป็น `isError: true` ใน result** ไม่ใช่ JSON-RPC error —
+  agent จะได้อ่านสาเหตุแล้วแก้เอง
+- **เก็บ session ไว้ใช้ซ้ำ แล้วลองต่อใหม่หนึ่งครั้งถ้าหลุด** (DO รีสตาร์ตได้เสมอ)
+
+### ลองโดยไม่ต้องมี MCP client
+
+```bash
+{
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
+  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_context","arguments":{}}}'
+  sleep 10
+} | CFOS_SECRET_FILE=~/.cfos-mcp.secret node server.mjs
+```
+
+### ต่อกับ Claude Code
+
+```bash
+claude mcp add cfos-context \
+  --env CFOS_SECRET_FILE=$HOME/.cfos-mcp.secret \
+  --env CFOS_URL=ws://localhost:8787/api \
+  -- node /path/to/cfos-context-mcp/server.mjs
+```
+
+```
+cfos-context: node .../server.mjs - ✔ Connected
+```
+
+> ⚠️ MCP server ที่เพิ่ม **กลางเซสชัน** จะยังไม่เข้า tool registry ของ agent
+> ต้องเริ่มเซสชันใหม่ถึงจะเรียก tool ได้
+
+---
+
+### ⚠️ กับดัก
+
+**1. ชื่อบัญชีมีขีดกลางไม่ได้**
+
+```
+Error: Invalid username. Must be alphanumeric starting with a letter.
+```
+
+`mcp-context-reader` ใช้ไม่ได้ → `mcpcontextreader` (ต้นแบบใส่ validation ไว้แล้ว)
+
+**2. `context` ไม่โผล่ใน `listGatekeeperVendors()`**
+
+เพราะเป็นแบบ auto-provision ต้องดูที่ `listAddableGatekeepers()` แทน
+(คู่กับ `scheduler` — สองตัวนี้ไม่ต้อง OAuth)
+
+**3. สร้าง public collection ไม่ได้ถ้าไม่ใช่แอดมิน** — dev server ตั้ง `ADMINS=["admin"]`
+ให้แล้ว ส่วน deployment จริงตั้งผ่าน env
+
+**4. read session ต้องมี workspace** ต้นแบบจึงเรียก `newGadget()` ทุกครั้งที่เชื่อมต่อ
+workspace พวกนี้เป็น *provisional* และถูกลบเอง แต่ก็ยังเป็นขยะระหว่างทาง
+
+---
+
+### 🚧 ข้อจำกัดที่ต้องปิดก่อนใช้จริง
+
+| ข้อ | ปัญหา | ทางแก้ |
+|---|---|---|
+| 1 | **ไม่มี API token ในระบบ** — ต้องใช้บัญชีบริการ + รหัสผ่าน ไม่มี scope ไม่มี revoke รายตัว | ยังไม่มีทางแก้ที่ดี — ต้องดูแล secret ให้ดี |
+| 2 | สร้าง workspace ทิ้งทุกครั้งที่สตาร์ต | จำ id ไว้แล้วเปิดซ้ำ |
+| 3 | **ไม่มี cache** — Cloudflare OS ล่ม = agent ทั้งทีมเสียบริบท | ใส่ cache ระยะสั้นฝั่ง MCP |
+| 4 | เห็นเฉพาะ public + private ของบัญชีบริการเอง | ถ้าต้องการบริบทรายคน ต้องออกแบบใหม่ |
+| 5 | ทุก `search`/`read` ถูกจดเป็น observation | **log จะโตตามการใช้ของ agent ไม่ใช่ของคน** |
+
+ข้อ 3 คือความเสี่ยง single-point-of-failure ที่มากับไอเดีย "single source" โดยธรรมชาติ —
+ยิ่งทีมพึ่งพามันมาก ยิ่งต้องมีแผนรองรับตอนมันล่ม
+
+---
+
+### 📝 แบบฝึกหัด
+
+1. ใส่ cache ระยะสั้น (เช่น 60 วินาที) ใน `withSession` แล้ววัดว่าจำนวน observation
+   ใน action log ลดลงแค่ไหน
+2. ทำให้ใช้ workspace เดิมซ้ำ แทนที่จะ `newGadget()` ทุกครั้ง —
+   ต้องเก็บ id ไว้ที่ไหน และจะรู้ได้ยังไงว่ามันยังอยู่
+3. ลองเขียน MCP tool ตัวที่สี่ที่ **เขียน** ได้ (เช่น `add_context_note`) แล้วถามตัวเองว่า
+   ทำไมต้นแบบนี้ถึงจงใจไม่ทำ — และถ้าจะทำจริงต้องมีอะไรเพิ่ม
+4. ออกแบบทิศ B บนกระดาษ: MCP tool ที่ยิงงานเข้า `ExternalMessageGateway`
+   แล้วระบุว่าใครคือคนที่ต้องเชื่อใจในสถาปัตยกรรมนั้น และจะจำกัดความเสียหายยังไงถ้า gateway รั่ว
+5. เทียบกับวิธีที่ทีมเก็บบริบทอยู่ตอนนี้ (CLAUDE.md / Notion / หัวคน) — ข้อไหนที่ MCP นี้
+   แก้ได้จริง ข้อไหนที่มันแก้ไม่ได้
+
+---
+
+## บทที่ 15: ไปต่อทางไหน
 
 อ่านครบทุกด้านหลักแล้ว เหลืออย่างเดียวที่ยังไม่ได้ลอง
 
@@ -2285,6 +2471,7 @@ overlay/packages/integration-tests/
   try-agent.mjs                              ← บทที่ 11
   inspect-shared.mjs                         ← บทที่ 11
   learn-07-gatekeeper-surface.mjs            ← บทที่ 12
+  cfos-context-mcp/{server,seed-demo}.mjs    ← บทที่ 14
   workerd-demo/{config.capnp,main.js}        ← บทที่ 9
   fixtures/gatekeeper-notes/wrangler.jsonc   ← บทที่ 4
   fixtures/gatekeeper-notes/src/notes-gatekeeper.ts
