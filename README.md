@@ -341,11 +341,29 @@ README อ้างไว้แบบนี้:
 
 ### รันเลย
 
+บทนี้ **ไม่ต้องมี `pnpm run-local` รันอยู่** เพราะ harness จะ boot worker ของตัวเองขึ้นมา
+แต่ต้อง generate ไฟล์ที่ backend ต้องใช้ก่อนหนึ่งครั้ง:
+
 ```bash
+pnpm --filter @gadgets/workshop-backend build:format-blueprints
 pnpm --filter @gadgets/integration-tests exec vitest run __tests__/notes-approval.test.ts
 ```
 
 ควรได้ `Tests 2 passed (2)` ใน ~25 วินาที
+
+> ⚠️ **ถ้าข้ามบรรทัดแรกจะเจอ error นี้** (เจอมาแล้วบน clone ใหม่):
+>
+> ```
+> Error: Build failed with 2 errors:
+>   ...admin-settings.ts: ERROR: Could not resolve "./generated/format-blueprints.js"
+> ```
+>
+> `packages/workshop-backend/src/generated/` อยู่ใน `.gitignore` — มันถูกสร้างโดย
+> `scripts/build-format-blueprints.mjs` ซึ่ง `pnpm build` และ `pnpm test` เรียกให้เอง
+> แต่เวลาสั่ง `vitest` ตรง ๆ จะข้ามขั้นนี้ไป
+>
+> ถ้าเคยรัน `pnpm run-local` หรือ `pnpm build` มาแล้วจะไม่เจอปัญหานี้ ซึ่งเป็นเหตุผลที่
+> มันหลุดรอดตอนทดสอบครั้งแรก
 
 ### โครงของ Gatekeeper
 

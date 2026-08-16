@@ -65,7 +65,8 @@ cat <<'EOF'
 
   node packages/integration-tests/learn-01-explore-api.mjs
 
-บทที่ 4 (ไม่ต้องมี pnpm run-local รันอยู่):
+บทที่ 4 (ไม่ต้องมี pnpm run-local รันอยู่ แต่ต้อง generate ก่อนหนึ่งครั้ง):
 
+  pnpm --filter @gadgets/workshop-backend build:format-blueprints
   pnpm --filter @gadgets/integration-tests exec vitest run __tests__/notes-approval.test.ts
 EOF
