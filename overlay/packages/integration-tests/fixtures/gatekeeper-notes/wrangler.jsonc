@@ -1,0 +1,17 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "gatekeeper-notes",
+
+  // ชี้ตรงไปที่ source เหมือน fixture gatekeeper-test (ไม่ผ่าน capnweb-validate)
+  "main": "src/notes-gatekeeper.ts",
+
+  "compatibility_date": "2026-02-02",
+  "compatibility_flags": ["experimental", "allow_irrevocable_stub_storage"],
+
+  "migrations": [
+    {
+      "tag": "v0",
+      "new_sqlite_classes": ["NotesGatekeeper", "NotesStore"]
+    }
+  ]
+}
