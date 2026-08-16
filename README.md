@@ -1,7 +1,7 @@
 # เรียน Cloudflare OS แบบลงมือทำ (ฉบับภาษาไทย)
 
 คู่มือเรียน [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) ภาษาไทย แบบลงมือทำ
-บทที่ 0–11 พร้อมสคริปต์และ fixture ที่รันได้จริง
+บทที่ 0–12 พร้อมสคริปต์และ fixture ที่รันได้จริง
 
 > ⚠️ repo นี้ **ไม่ใช่ของ Cloudflare** และไม่ได้รับการรับรองจาก Cloudflare
 > เป็นบันทึกการเรียนที่เขียนขึ้นเพื่อให้คนอื่นเดินตามได้โดยไม่ต้องลองผิดลองถูกซ้ำ
@@ -52,10 +52,11 @@ git clone https://github.com/monthop-gmail/learning-th-cloudflare-os.git
 | [8](#บทที่-8-blueprints-กับ-sharing--แจกโค้ด-vs-แจกสิทธิ์) | Blueprints กับ Sharing — แจกโค้ด vs แจกสิทธิ์ | ไม่ | 45 นาที |
 | [9](#บทที่-9-รันบน-workerd-เอง--ไล่หาว่า-coming-soon-ติดตรงไหน) | รันบน workerd เอง — ไล่หาว่า "COMING SOON" ติดตรงไหน | ไม่ | 45 นาที |
 | [10](#บทที่-10-เทียบ-agent-loop--cloudflare-os-กับ-coding-agent-ที่คุณใช้อยู่) | เทียบ agent loop กับ coding agent ที่คุณใช้อยู่ | ไม่ | 30 นาที |
-| [11](#บทที่-11-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
+| [11](#บทที่-11-ลอง-agent-จริง--ที่อ่านมาสิบบทตรงไหม) | ลอง agent จริง — ที่อ่านมาสิบบทตรงไหม | **ต้องมี** | 30 นาที |
+| [12](#บทที่-12-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
 
-> 💡 บทที่ 0–10 **ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
-> ของ repo นี้คือสถาปัตยกรรม ไม่ใช่ตัวโมเดล
+> 💡 **บทที่ 0–10 ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
+> ของ repo นี้คือสถาปัตยกรรม ไม่ใช่ตัวโมเดล — มีแค่บทที่ 11 บทเดียวที่ต้องใช้
 
 ---
 
@@ -1681,7 +1682,210 @@ coding agent: จบเซสชันคือจบ ของที่เห�
 
 ---
 
-## บทที่ 11: ไปต่อทางไหน
+## บทที่ 11: ลอง agent จริง — ที่อ่านมาสิบบทตรงไหม
+
+บทเดียวในคู่มือที่ **ต้องใช้ API key** และเป็นบทที่คุ้มที่สุด เพราะเราจะเอาทุกอย่างที่อ่านมา
+ไปเทียบกับพฤติกรรมจริงทีเดียว
+
+```bash
+GEMINI_KEY_FILE=~/.gemini.key \
+  node packages/integration-tests/try-agent.mjs "Make a tic tac toe game."
+```
+
+> 🔑 **อย่าวาง key ลงในแชทหรือใน argv** — เก็บลงไฟล์แล้วส่ง path มาแทน
+> สคริปต์อ่านจากไฟล์อย่างเดียว ไม่มี key ฝังในซอร์ส
+> ```bash
+> read -s K && printf '%s' "$K" > ~/.gemini.key && chmod 600 ~/.gemini.key
+> ```
+
+### ตั้งค่าโมเดล
+
+```js
+await auth.addModel(
+  { type: "agent", id: "gemini-3.6-flash", name: "Gemini" },
+  { provider: "google", model: "gemini-3.6-flash", apiToken: API_KEY });
+await auth.setPreferredModel("gemini-3.6-flash");
+```
+
+`listModels()` จากว่างเปล่ากลายเป็นมีหนึ่งตัว — นั่นแหละพร้อมใช้
+
+> 💡 **key ของ Gemini มีสองรูปแบบ** — แบบเก่าขึ้นต้น `AIza` แบบใหม่ขึ้นต้น `AQ.`
+> ทั้งคู่ใช้กับ header `x-goog-api-key` เหมือนกัน (ไม่ใช่ `Authorization: Bearer`)
+> เช็คเร็ว ๆ ว่า key ใช้ได้ไหม:
+> ```bash
+> curl -s -o /dev/null -w '%{http_code}\n' -H "x-goog-api-key: $K" \
+>   https://generativelanguage.googleapis.com/v1beta/models
+> ```
+
+---
+
+### 🎯 ร่องรอยที่ agent ทิ้งไว้
+
+```
+🔧 listBlueprints
+🔧 createGadget  "Tic Tac Toe"
+🔧 readFile  "server.js"  ⚠ File does not exist.
+🔧 writeFile  "server.js"
+🔧 writeFile  "client.js"
+🔧 writeFile  "README.md"
+📝 changes  (Yjs update)
+🔧 executeCode  "393 ตัวอักษร"
+·  useGadget
+```
+
+**ทุกบรรทัดยืนยันสิ่งที่เราอ่านมา:**
+
+| ที่เห็น | ตรงกับบทไหน |
+|---|---|
+| `listBlueprints` มาก่อนเสมอ | บทที่ 7 — system prompt บอกว่า *"users rarely ask for 'a Gadget'... Any of those is a request to consider a blueprint"* |
+| สามไฟล์ `server.js` / `client.js` / `README.md` | บทที่ 2 — โครงเดียวกับ blueprint ที่ deployment แถมมา |
+| `changes` เป็นข้อความในแชท | บทที่ 2 — โค้ดคือ Yjs CRDT ไม่ใช่ไฟล์ |
+| `executeCode` ปิดท้าย | บทที่ 7 — agent **ทดสอบงานตัวเอง** ก่อนจบ |
+
+`readFile` ที่พังตั้งแต่ต้นก็น่าสนใจ — agent **ลองอ่านก่อนเขียน** ทั้งที่เพิ่งสร้าง gadget เปล่า ๆ เอง
+
+### 💰 ราคาจริง
+
+```
+totalCost: 0.27755355
+```
+
+`api.ts` ระบุว่า *"Total cost of AI inference **in dollars**"* — **หนึ่งเกม ≈ $0.28**
+กับโมเดล flash ตัวเล็ก ตัวเลขนี้มีไว้เทียบเวลาคิดว่าจะให้ทีมใช้จริง
+
+---
+
+### 💎 ค้นพบที่ไม่มีในบทไหนเลย: งานของ agent เป็น "ข้อเสนอ"
+
+พอเปิดไปอ่านโค้ดหลัง agent ทำเสร็จ ได้ไฟล์ **ว่างเปล่า** ทั้งที่เห็น `writeFile` ไปสามครั้ง
+
+สาเหตุอยู่ใน `WorkpieceSummary.chatId`:
+
+> *"For gadgets, this means the gadget is still **provisional**: it becomes permanent when the
+> user accepts the chat's changes through its creation message, and is deleted if those changes
+> are reverted."*
+
+```
+ก่อน merge:  "Tic Tac Toe" id=0 chatId=0          ← ยังเป็นข้อเสนอ
+             (อ่าน mainline → ไฟล์ว่าง)
+
+หลัง merge:  "Tic Tac Toe" id=0 (ถาวรแล้ว)
+             13,800  server.js
+             25,156  client.js
+              1,826  README.md
+```
+
+**นี่คือ human-in-the-loop ชั้นที่สาม** ที่เรายังไม่เคยแตะ:
+
+| ชั้น | คุมอะไร | บท |
+|---|---|---|
+| approval queue | action ที่มีผลข้างเคียงต่อบริการภายนอก | 4 |
+| observers | ใครเห็นข้อมูลที่อ่านเข้ามาได้ | 5 |
+| **merge changes** | **โค้ดที่ agent เขียน จะลง mainline เมื่อไหร่** | **11** |
+
+สามชั้นนี้คุมคนละอย่างและทำงานอิสระจากกัน
+
+### ⚠️ กับดักใหญ่: `mergeChanges(chatId, null)` ไม่ได้แปลว่า "ทั้งหมด"
+
+ผมเสียเวลาไปสองรอบกับข้อนี้ เพราะ**มันเงียบ ไม่มี error** แค่ไม่ merge
+
+ต้องหา sequence ของข้อความ `changes` มาระบุเอง:
+
+```js
+const page = await overseer.getChatHistory(chatId);
+const last = [...(page.messages ?? page)].reverse().find(m => m.type === "changes");
+await overseer.mergeChanges(chatId, last.sequence);
+```
+
+ดูประวัติทั้งเธรดได้แบบนี้ — ตัว `changes` อยู่ที่ `seq=7`:
+
+```
+seq=0  message                     seq=6  message  tools=writeFile
+seq=1  message  tools=listBlueprints   seq=7  changes  createdGadgets=[...]
+seq=2  message  tools=createGadget     seq=8  message  tools=executeCode
+seq=3  message  tools=readFile         seq=9  useGadget
+seq=4  message  tools=writeFile        seq=10 message
+seq=5  message  tools=writeFile
+```
+
+---
+
+### 🎮 แล้วก็เล่นเกมที่ AI เขียน
+
+```bash
+node packages/integration-tests/inspect-shared.mjs <workspaceId> <shareKey>
+```
+
+สคริปต์นี้เปิด workspace ผ่าน **share link** (บทที่ 8) จึงส่องของได้โดย**ไม่เรียก LLM สักครั้ง** —
+มีประโยชน์มากตอนโควตาหมด
+
+```
+เมธอดที่ server เปิดให้เรียก:
+  getState, makeMove, processAIMove, resetGame, resetScores,
+  undoMove, updateSettings, subscribe, broadcast
+
+getState() → {"gridSize":3,"winCondition":3,"aiDifficulty":"hard",
+              "symbols":{"X":"❌","O":"⭕"},"scores":{...},"moveHistory":[]}
+```
+
+แล้วลงหมากจริง:
+
+```
+กระดานเริ่มต้น:        ผมลง X ที่ช่อง 4:
+   · · ·                  O · ·
+   · · ·                  · X ·
+   · · ·                  · · ·
+```
+
+**AI ในเกม (ที่ Gemini เขียนไว้ใน `server.js` เอง) ตอบกลับด้วย O ทันที**
+
+> 🎓 **นี่คือลูปที่ครบวง** — Gemini เขียนโค้ด แล้ว agent อีกตัว (สคริปต์นี้) เรียก API ของมัน
+> โดย **ไม่มีเอกสารสักบรรทัด** แค่ `grep` ชื่อเมธอดจาก `server.js`
+> คือคำตอบของคำถามในบทที่ 3 ว่าทำไม agent ถึงร่วมงานในแอปได้ทันที
+
+สังเกตว่ามันใส่มาเกินที่ขอเยอะ — กระดานปรับขนาดได้ (`gridSize`/`winCondition`),
+ระดับความยาก, ธีม, ประวัติการเดิน, `undoMove` ทั้งที่เราขอแค่ "tic tac toe"
+
+---
+
+### ⚠️ กับดักอื่น
+
+**1. `AiToolCall` ใช้ field ชื่อ `toolName` + `input`** ไม่ใช่ `name`/`arguments`
+ถ้าอ่านผิดจะได้ `undefined` เรียงเป็นแถวโดยไม่มี error
+
+**2. `AiChatMessageBody` เก็บข้อความไว้ที่ `.message`** ไม่ใช่ `.text`
+
+**3. `entry()` ของ workpiece subscriber เป็น upsert** ถูกเรียกซ้ำเมื่อสถานะเปลี่ยน (เช่นหลัง merge)
+ถ้า `push` ทื่อ ๆ จะได้รายการซ้ำ ต้องหาแล้วแทนที่
+
+**4. Gemini free tier จำกัด 20 requests** — รันสามรอบติดก็เต็ม และ **รอเป็นนาทีไม่พอ**
+(ข้อความบอก "retry in 36s" แต่รอ 75 วิแล้วยังไม่คืน — น่าจะเป็นโควตารายวัน)
+
+```
+Quota exceeded for metric: generativelanguage.googleapis.com/
+generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash
+```
+
+ระบบรายงาน error นี้เป็นข้อความชนิด `error` ในแชท ไม่ได้ crash — ดีไซน์ที่ถูกต้อง
+
+**5. อย่าลืม rotate key หลังทดสอบ** ถ้ามันเคยผ่านที่ที่คุณควบคุมไม่ได้
+
+---
+
+### 📝 แบบฝึกหัด
+
+1. สั่งงานเดิมสองครั้งแล้วเทียบร่องรอย — `listBlueprints` มาก่อนทุกครั้งไหม?
+   ลำดับ tool เหมือนเดิมแค่ไหน?
+2. ลอง `revertChanges()` แทน `mergeChanges()` แล้วดูว่า gadget หายไปจริงตามที่เอกสารบอกไหม
+3. สั่งต่อจากเกมที่ได้ว่า *"I'll be X and you be O. I've made my first move. Your turn."*
+   แล้วดูว่า agent เรียก `makeMove()` ของแอปตัวเองผ่าน `executeCode` หรือเปล่า
+4. เทียบ `totalCost` ระหว่างงานง่ายกับงานยาก แล้วประเมินว่าถ้าทีม 10 คนใช้ทุกวันจะเป็นเงินเท่าไร
+5. ลองโมเดลอื่น (`gemini-2.5-flash`, `gemini-3.7-flash`) แล้วดูว่าลำดับ tool ต่างกันไหม —
+   ระบบเดียวกัน prompt เดียวกัน ต่างแค่โมเดล
+
+---
+
+## บทที่ 12: ไปต่อทางไหน
 
 อ่านครบทุกด้านหลักแล้ว เหลืออย่างเดียวที่ยังไม่ได้ลอง
 
@@ -1718,6 +1922,8 @@ overlay/packages/integration-tests/
   learn-04-map-kernel.mjs                    ← บทที่ 6
   learn-05-agent-anatomy.mjs                 ← บทที่ 7
   learn-06-bare-workerd.mjs                  ← บทที่ 9
+  try-agent.mjs                              ← บทที่ 11
+  inspect-shared.mjs                         ← บทที่ 11
   workerd-demo/{config.capnp,main.js}        ← บทที่ 9
   fixtures/gatekeeper-notes/wrangler.jsonc   ← บทที่ 4
   fixtures/gatekeeper-notes/src/notes-gatekeeper.ts
@@ -1765,3 +1971,5 @@ overlay/packages/integration-tests/
    ถอนสิทธิ์เลยแค่ตัดเส้นเดียว ไม่ต้อง cascade — และใส่กลับก็คืนสภาพเดิมได้ทันที
 10. **แซนด์บ็อกซ์เป็นของ workerd ไม่ใช่ของ Cloudflare** — Worker Loader, DO+SQLite และ
     `globalOutbound: null` รันบน runtime เปล่าได้หมด ที่ยังขาดสำหรับ self-host คือ KV กับ R2
+11. **มี human-in-the-loop สามชั้นที่อิสระจากกัน** — อนุมัติ action (บท 4), ตรวจ observer (บท 5)
+    และรับข้อเสนอโค้ดเข้า mainline (บท 11) โค้ดที่ agent เขียนยังไม่ถาวรจนกว่าคนจะรับ
