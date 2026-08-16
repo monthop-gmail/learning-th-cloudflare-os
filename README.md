@@ -1,7 +1,7 @@
 # เรียน Cloudflare OS แบบลงมือทำ (ฉบับภาษาไทย)
 
 คู่มือเรียน [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) ภาษาไทย แบบลงมือทำ
-บทที่ 0–9 พร้อมสคริปต์และ fixture ที่รันได้จริง
+บทที่ 0–10 พร้อมสคริปต์และ fixture ที่รันได้จริง
 
 > ⚠️ repo นี้ **ไม่ใช่ของ Cloudflare** และไม่ได้รับการรับรองจาก Cloudflare
 > เป็นบันทึกการเรียนที่เขียนขึ้นเพื่อให้คนอื่นเดินตามได้โดยไม่ต้องลองผิดลองถูกซ้ำ
@@ -50,9 +50,10 @@ git clone https://github.com/monthop-gmail/learning-th-cloudflare-os.git
 | [6](#บทที่-6-เข้าเคอร์เนล--overseerts-9745-บรรทัด) | เข้าเคอร์เนล — `overseer.ts` 9,745 บรรทัด | ไม่ | 60 นาที |
 | [7](#บทที่-7-agent--code-mode-prompt-และ-context-compaction) | Agent — Code Mode, prompt, compaction | ไม่ | 45 นาที |
 | [8](#บทที่-8-blueprints-กับ-sharing--แจกโค้ด-vs-แจกสิทธิ์) | Blueprints กับ Sharing — แจกโค้ด vs แจกสิทธิ์ | ไม่ | 45 นาที |
-| [9](#บทที่-9-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
+| [9](#บทที่-9-รันบน-workerd-เอง--ไล่หาว่า-coming-soon-ติดตรงไหน) | รันบน workerd เอง — ไล่หาว่า "COMING SOON" ติดตรงไหน | ไม่ | 45 นาที |
+| [10](#บทที่-10-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
 
-> 💡 บทที่ 0–8 **ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
+> 💡 บทที่ 0–9 **ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
 > ของ repo นี้คือสถาปัตยกรรม ไม่ใช่ตัวโมเดล
 
 ---
@@ -1299,9 +1300,209 @@ repo มีกฎ lint เฉพาะทางที่อนุญาตแค
 
 ---
 
-## บทที่ 9: ไปต่อทางไหน
+## บทที่ 9: รันบน workerd เอง — ไล่หาว่า "COMING SOON" ติดตรงไหน
 
-ผ่านเคอร์เนล agent และระบบสิทธิ์มาครบแล้ว เหลือสองอย่าง
+README เขียนไว้ว่า:
+
+> **Deploy to your own server using `workerd`** — **COMING SOON**
+>
+> *"Cloudflare OS can run entirely on `workerd`... We are still working on documentation and
+> tooling... If you are feeling adventurous, read the low-level documentation for workerd config
+> (or point your agent at it) and have a go."*
+
+บทนี้คือการ "have a go" — ไม่ได้จบด้วยสแตกเต็มที่รันได้ แต่จบด้วย**คำตอบที่ชัดว่าติดอะไรบ้าง**
+และพิสูจน์ว่าส่วนที่ยากที่สุดไม่ได้ติดเลย
+
+```bash
+node packages/integration-tests/learn-06-bare-workerd.mjs
+```
+
+### เซอร์ไพรส์ข้อแรก: workerd รันมันอยู่แล้ว
+
+ระหว่างที่ `pnpm run-local` ทำงาน ลองดูโปรเซสจริง:
+
+```bash
+ps -eo pid,args | grep workerd
+```
+
+```
+workerd serve --binary --experimental --socket-addr=entry=localhost:8787
+        --external-addr=loopback=127.0.0.1:42383 --control-fd=3 -
+```
+
+**นี่คือ workerd ตัวจริง** ไม่ใช่ emulator และ binary ก็ติดมากับ repo อยู่แล้ว
+(`@cloudflare/workerd-linux-64`) ส่วน `-` ท้ายคำสั่งแปลว่า config เป็น capnp binary ที่ป้อนทาง stdin
+ซึ่ง wrangler/miniflare เป็นคนปั้นให้
+
+> 🎓 คำถามจึงไม่ใช่ *"workerd รันไหวไหม"* แต่เป็น **"ใครจะปั้น config ให้ และ binding ที่
+> Cloudflare จัดให้จะเอามาจากไหน"**
+
+### ของจริงต้องการอะไรบ้าง
+
+ไล่จาก `wrangler.jsonc` ของทุกแพ็กเกจที่ deploy:
+
+| แพ็กเกจ | ต้องการ |
+|---|---|
+| `workshop-backend` | KV×2, R2×1, LOADER, DO(sqlite), BROWSER |
+| `router` | service×1, ASSETS |
+| `gatekeeper-context` | KV×1, DO(sqlite) |
+| `gatekeeper-*` อีก 14 ตัว | DO(sqlite) เท่านั้น |
+
+### workerd เปล่ารองรับอะไร — อ่านจาก schema ไม่ต้องเดา
+
+schema เต็มอยู่ที่ `node_modules/workerd/workerd.capnp` (1,063 บรรทัด) เปิดอ่านได้เลย
+ใน `struct Binding` มี union ที่บอกทุกอย่าง:
+
+| binding | workerd ทำเองไหม |
+|---|---|
+| `durableObjectNamespace` (+ `enableSql`) | ✅ ทำเอง |
+| `workerLoader` | ✅ ทำเอง |
+| `service` | ✅ ทำเอง |
+| `kvNamespace` | ⚠️ เป็น **`ServiceDesignator`** |
+| `r2Bucket` | ⚠️ เป็น **`ServiceDesignator`** |
+
+**`ServiceDesignator` คือกุญแจของบทนี้** — มันแปลว่า workerd *มี* binding ชื่อ KV/R2 ให้ใช้
+แต่ **ไม่ได้ implement เอง** มันแค่ส่งต่อไปยัง service ที่เราชี้ให้ ใครจะเอาอะไรมาเสียบก็ได้
+ขอแค่พูดโปรโตคอลถูก
+
+miniflare ก็ทำแบบนี้แหละ — มันมี Worker ที่ implement ไว้ให้แล้ว:
+
+```
+miniflare/dist/src/workers/kv/namespace.worker.js    12 KB
+miniflare/dist/src/workers/r2/bucket.worker.js       44 KB
+```
+
+รวมกันไม่ถึง 60 KB นี่คือขนาดของช่องว่างที่แท้จริง
+
+### 🔬 พิสูจน์: primitive ที่ยากที่สุดรันบน workerd เปล่าได้
+
+`workerd-demo/config.capnp` เป็น config ที่เขียนมือล้วน ๆ ไม่มี wrangler ไม่มี miniflare
+ไม่ต้องมีบัญชี Cloudflare:
+
+```capnp
+const mainWorker :Workerd.Worker = (
+  modules = [ (name = "main.js", esModule = embed "main.js") ],
+  compatibilityDate = "2026-02-01",
+  compatibilityFlags = ["experimental"],
+
+  durableObjectNamespaces = [
+    (className = "Counter", uniqueKey = "counter-demo-key", enableSql = true),
+  ],
+  durableObjectStorage = (localDisk = "do-storage"),
+
+  bindings = [
+    (name = "COUNTER", durableObjectNamespace = "Counter"),
+    (name = "LOADER", workerLoader = ()),          # ← หัวใจของ Cloudflare OS
+  ],
+);
+```
+
+worker หลักโหลดโค้ดจาก**สตริง** ขึ้นมารัน แบบเดียวกับที่ Overseer โหลด Gadget จาก Yjs doc:
+
+```js
+const worker = env.LOADER.get("gadget-v1", async () => ({
+  mainModule: "gadget.js",
+  modules: { "gadget.js": GADGET_SOURCE },
+  globalOutbound: null,
+}));
+```
+
+### ผลลัพธ์ที่ควรได้
+
+```
+1) Worker Loader — โหลดโค้ดที่เขียนขึ้นตอน runtime
+   { "hello": "ฉันคือโค้ดที่ถูกโหลดตอน runtime" }
+
+2) globalOutbound: null — แซนด์บ็อกซ์ตัดเน็ต
+   {
+     "escaped": false,
+     "error": "Error: This worker is not permitted to access the internet via global
+               functions like fetch(). It must use capabilities (such as bindings in
+               'env') to talk to the outside world."
+   }
+   ✓ ออกไม่ได้ ตามคาด
+
+3) Durable Object + SQLite บนดิสก์
+   นับสองครั้ง: 1 → 2
+```
+
+รันสคริปต์ซ้ำอีกครั้ง ตัวเลขจะเป็น `3 → 4` — **state อยู่รอดข้ามการรีสตาร์ตโปรเซส**
+ไฟล์โผล่จริงที่ `workerd-demo/do-data/counter-demo-key`
+
+> 🎓 ข้อความบล็อกเน็ตนั้น **มาจาก runtime ไม่ใช่จากโค้ดของ Cloudflare OS** —
+> แซนด์บ็อกซ์ที่ทั้งผลิตภัณฑ์พึ่งพา เป็นของ workerd ล้วน ๆ ไม่ได้ผูกกับแพลตฟอร์ม
+
+### ✅ สรุปช่องว่างที่แท้จริง
+
+| สิ่งที่ต้องมี | สถานะ |
+|---|---|
+| Durable Object + SQLite | ✅ พิสูจน์แล้วว่ารันได้ |
+| Worker Loader (Dynamic Workers) | ✅ พิสูจน์แล้วว่ารันได้ |
+| แซนด์บ็อกซ์ `globalOutbound: null` | ✅ พิสูจน์แล้วว่ารันได้ |
+| service bindings ระหว่าง worker | ✅ workerd ทำเอง |
+| **KV ×3** | ❌ ต้องหา service มาเสียบ |
+| **R2 ×1** | ❌ ต้องหา service มาเสียบ |
+| ASSETS | 🟡 **optional** |
+| BROWSER | 🟡 **optional** |
+
+สองอันล่างเป็น optional โดยเจตนา และโค้ดเขียนเผื่อไว้แล้ว:
+
+> `env.d.ts`: *"**Self-hosted deployments may omit the binding**, so use sites read it as
+> `BrowserRun | undefined` and null-check."*
+
+> `router/src/index.ts`: *"Present in production (wrangler.jsonc assets stanza); **absent in dev**."*
+> — dev ไม่มี ASSETS แล้วปล่อยให้ตกไปที่ backend แทน ซึ่งใช้ท่าเดียวกันกับ self-host ได้
+
+**เหลือแค่ KV กับ R2 จริง ๆ** ไม่ใช่ "ยังทำไม่ได้" แต่เป็น "ยังไม่มีใครแพ็กของสองชิ้นนี้ให้"
+
+### ⚠️ กับดัก
+
+**1. capnp ใช้ `#` เป็นคอมเมนต์เท่านั้น** ใส่ `//` แล้วพังทันที และข้อความ error ก็ไม่ได้ชี้ตรงจุด:
+
+```
+config.capnp:1:19: Parse error.
+The config file does not define any top-level constants of type 'Config'.
+```
+
+**2. ต้องมี `--experimental`** ไม่งั้น `workerLoader` กับ `ctx.storage.kv` ใช้ไม่ได้
+โชคดีที่ข้อความบอกวิธีแก้มาเลย:
+
+```
+service main: The compatibility flag experimental is experimental and may break or be
+removed in a future version of workerd. To use this flag, you must pass --experimental
+on the command line.
+```
+
+**3. service ที่ `localDisk` ชี้ถึง ต้องประกาศใน `services` ด้วย** ไม่ใช่แค่ประกาศเป็น const ลอย ๆ
+
+```
+service main: durableObjectStorage config refers to a service "do-storage",
+but no such service is defined.
+```
+
+**4. หา binary ของ workerd ด้วย `require.resolve` ไม่เจอ** — มันอยู่ในแพ็กเกจเฉพาะแพลตฟอร์ม
+(`@cloudflare/workerd-<os>-<arch>`) ซึ่งไม่ใช่ dep ของแพ็กเกจที่เรารันอยู่ pnpm เลยไม่ยอมให้เห็น
+สคริปต์จึงค้นจาก `node_modules/.pnpm` ตรง ๆ
+
+**5. พอร์ตชนเงียบ ๆ** ถ้ารันซ้อนกันจะได้ `Address already in use` พร้อม stack trace ยาวเหยียด
+หาตัวที่ยึดพอร์ตด้วย `ss -ltnp | grep 8791` แล้ว kill เฉพาะตัวนั้น —
+**อย่าใช้ `pkill -f config.capnp` เพราะมันจะไปแมตช์คำสั่งของตัวเองแล้วฆ่าเชลล์ตัวเอง** (ผมโดนมาแล้ว)
+
+### 📝 แบบฝึกหัด
+
+1. เพิ่ม binding `kvNamespace` ใน `config.capnp` ให้ชี้ไปที่ service ที่เราเขียนเอง
+   (worker ที่ตอบ GET/PUT/DELETE ก็พอเริ่มได้) แล้วดูว่า `env.MY_KV.get()` เรียกอะไรออกมาบ้าง
+2. ลองเอา `globalOutbound: null` ออก แล้วยิง `/escape` ใหม่ — ยืนยันว่ามันคือบรรทัดที่กั้นจริง
+3. ลองโหลด worker ชื่อเดิมสองครั้งด้วยโค้ดคนละแบบ แล้วดูว่าได้อันไหน
+   (คำใบ้: schema บอกว่า loader *"serves as a cache of Workers"*)
+4. อ่าน `scripts/release/manifest-lib.mjs` แล้วเทียบว่า manifest ที่ใช้ deploy ขึ้น Cloudflare
+   ต่างจาก capnp config ที่ workerd กินตรงไหนบ้าง
+
+---
+
+## บทที่ 10: ไปต่อทางไหน
+
+อ่านครบทุกด้านหลักแล้ว เหลืออย่างเดียวที่ยังไม่ได้ลอง
 
 | ลำดับ | เป้าหมาย | ไฟล์ |
 |---|---|---|
@@ -1335,6 +1536,8 @@ overlay/packages/integration-tests/
   learn-03-gadget-api.mjs                    ← บทที่ 3
   learn-04-map-kernel.mjs                    ← บทที่ 6
   learn-05-agent-anatomy.mjs                 ← บทที่ 7
+  learn-06-bare-workerd.mjs                  ← บทที่ 9
+  workerd-demo/{config.capnp,main.js}        ← บทที่ 9
   fixtures/gatekeeper-notes/wrangler.jsonc   ← บทที่ 4
   fixtures/gatekeeper-notes/src/notes-gatekeeper.ts
   __tests__/notes-approval.test.ts           ← บทที่ 4
@@ -1379,3 +1582,5 @@ overlay/packages/integration-tests/
    ชุดเดียวให้ดูแล และ agent มีแค่ 13 tools เพราะ `executeCode` ทำแทนได้เกือบหมด
 9. **สิทธิ์คือ "เดินถึงเจ้าของได้ไหม" คำนวณสดทุกครั้งที่เปิด** ไม่มีตารางสิทธิ์ให้ดูแล
    ถอนสิทธิ์เลยแค่ตัดเส้นเดียว ไม่ต้อง cascade — และใส่กลับก็คืนสภาพเดิมได้ทันที
+10. **แซนด์บ็อกซ์เป็นของ workerd ไม่ใช่ของ Cloudflare** — Worker Loader, DO+SQLite และ
+    `globalOutbound: null` รันบน runtime เปล่าได้หมด ที่ยังขาดสำหรับ self-host คือ KV กับ R2
