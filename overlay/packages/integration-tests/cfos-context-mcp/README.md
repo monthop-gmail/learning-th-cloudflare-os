@@ -9,13 +9,25 @@ coding agent ──MCP(stdio)──► cfos-context-mcp ──Cap'n Web──►
                                                           Context Library
 ```
 
-**อ่านอย่างเดียวโดยตั้งใจ** — เปิดแค่ 3 tool ไม่มีเมธอดเขียนสักตัว:
+**ฝั่งอ่าน** — Context Library:
 
 | tool | ทำอะไร |
 |---|---|
 | `list_context` | ดูว่ามี collection/เอกสารอะไรบ้าง |
 | `search_context` | ค้นข้อความเต็ม (ภาษาไทยก็ค้นได้) |
 | `read_context_document` | อ่านเอกสารเต็ม ๆ ด้วย `docId` |
+
+**ฝั่งเขียน** — สั่งงาน agent ข้างใน (ต้องตั้ง `CFOS_AI_KEY_FILE`):
+
+| tool | ทำอะไร |
+|---|---|
+| `list_cfos_workspaces` | ดู workspace ที่บัญชีนี้ถูกเชิญเข้า |
+| `ask_cfos_agent` | สั่ง agent สร้าง/แก้แอป **ใน workspace ที่ระบุเท่านั้น** |
+| `check_cfos_chat` | ตามผล + ดูว่ามี action รอมนุษย์อนุมัติไหม |
+
+> 🔒 **`ask_cfos_agent` ไม่สร้าง workspace ใหม่เด็ดขาด** — ต้องมีคนเชิญบัญชีนี้เข้าไปก่อน
+> เพราะ workspace ที่คนไม่ได้เป็น collaborator จะซ่อน action ที่รออนุมัติจากสายตาคน
+> (เหตุผลเต็มอยู่ในบทที่ 15 ของคู่มือ)
 
 ---
 
@@ -64,6 +76,9 @@ claude mcp add cfos-context \
 | `CFOS_URL` | `ws://localhost:8787/api` | ใช้ `wss://` สำหรับ deployment จริง |
 | `CFOS_USER` | `mcpcontextreader` | ⚠️ **ตัวอักษร+ตัวเลขเท่านั้น ขึ้นต้นด้วยตัวอักษร** — มีขีดกลางไม่ได้ |
 | `CFOS_SECRET_FILE` | — | **บังคับ** ไฟล์ที่เก็บ secret ของบัญชีบริการ |
+| `CFOS_AI_KEY_FILE` | — | ใส่เมื่อจะใช้ `ask_cfos_agent` — ค่าใช้จ่ายลงบัญชีนี้ |
+| `CFOS_AI_MODEL` | `gemini-3.6-flash` | |
+| `CFOS_AI_PROVIDER` | `google` | |
 
 รันครั้งแรกจะสร้างบัญชีให้เอง ครั้งถัดไปจะ login ด้วย secret เดิม
 
@@ -107,7 +122,12 @@ Durable Object ของผู้ใช้ต้อง cold start — วัด�
 = public collection ทั้งหมด + private ของบัญชีนั้นเอง (ซึ่งไม่ควรมี)
 ถ้าอยากให้ agent เห็นบริบทของ *ผู้ใช้แต่ละคน* ต้องออกแบบใหม่ทั้งหมด
 
-**6. การอ่านถูกบันทึกเป็น observation**
+**6. `list_cfos_workspaces` ว่าง ไม่ได้แปลว่าไม่มีสิทธิ์**
+`docs/sharing.md`: *"A shared gadget does not appear on a collaborator's home page until they
+first open it."* — workspace ที่เพิ่งถูกแชร์มาจะยังไม่โผล่ ต้องให้คนส่ง `workspaceId` มา
+แล้วเรียก `ask_cfos_agent` / `check_cfos_chat` ด้วย id นั้นสักครั้งก่อน จากนั้นจึงขึ้นในรายการ
+
+**7. การอ่านถูกบันทึกเป็น observation**
 ทุก `search`/`read` ผ่าน `authorizeObservation()` และถูกจดลง log — เป็นเรื่องดี
 แต่แปลว่า **log จะโตตามการใช้งานของ agent** ไม่ใช่ของคน
 
