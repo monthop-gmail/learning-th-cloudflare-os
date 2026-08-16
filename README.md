@@ -1,7 +1,7 @@
 # เรียน Cloudflare OS แบบลงมือทำ (ฉบับภาษาไทย)
 
 คู่มือเรียน [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) ภาษาไทย แบบลงมือทำ
-บทที่ 0–6 พร้อมสคริปต์และ fixture ที่รันได้จริง
+บทที่ 0–7 พร้อมสคริปต์และ fixture ที่รันได้จริง
 
 > ⚠️ repo นี้ **ไม่ใช่ของ Cloudflare** และไม่ได้รับการรับรองจาก Cloudflare
 > เป็นบันทึกการเรียนที่เขียนขึ้นเพื่อให้คนอื่นเดินตามได้โดยไม่ต้องลองผิดลองถูกซ้ำ
@@ -44,9 +44,10 @@ git clone https://github.com/monthop-gmail/learning-th-cloudflare-os.git
 | [3](#บทที่-3-เรียก-api-ของ-gadget-แบบที่-agent-ทำ) | เรียก API ของ Gadget แบบที่ agent ทำ | ไม่ | 20 นาที |
 | [4](#บทที่-4-เขียน-gatekeeper-เองเพื่อเข้าใจ-approval-queue) | เขียน Gatekeeper เองเพื่อเข้าใจ approval queue | ไม่ | 60 นาที |
 | [5](#บทที่-5-observers--ใครมีสิทธิ์-เห็น-สิ่งที่-gadget-อ่านมา) | Observers — ใครมีสิทธิ์เห็นสิ่งที่ Gadget อ่านมา | ไม่ | 45 นาที |
-| [6](#บทที่-6-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
+| [6](#บทที่-6-เข้าเคอร์เนล--overseerts-9745-บรรทัด) | เข้าเคอร์เนล — `overseer.ts` 9,745 บรรทัด | ไม่ | 60 นาที |
+| [7](#บทที่-7-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
 
-> 💡 บทที่ 0–5 **ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
+> 💡 บทที่ 0–6 **ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
 > ของ repo นี้คือสถาปัตยกรรม ไม่ใช่ตัวโมเดล
 
 ---
@@ -698,16 +699,244 @@ binding กว้างควรใช้ **C** ก็ต่อเมื่อ *
 
 ---
 
-## บทที่ 6: ไปต่อทางไหน
+## บทที่ 6: เข้าเคอร์เนล — `overseer.ts` 9,745 บรรทัด
 
-ตอนนี้คุณรู้จัก workpiece / binding / action / observer / blueprint หมดแล้ว พร้อมอ่านเคอร์เนลของจริง
+ถึงตรงนี้เรารู้จัก workpiece / binding / action / observer / blueprint ครบแล้ว
+พร้อมเปิดไฟล์ที่ `AGENTS.md` บอกว่า **reviewer อ่านทุกบรรทัด**:
+
+> *"This is the **kernel**: it defines the architecture and is held to a higher bar than
+> UI/gatekeeper code. Reviewers read *every line* of `workshop-backend`... so keep diffs
+> here small and elegant."*
+
+### กติกาข้อแรก: อย่าอ่านรวด
+
+ไฟล์หมื่นบรรทัดอ่านตั้งแต่ต้นจนจบไม่ไหวและไม่ควร ให้ **ทำแผนที่ก่อน**
+
+```bash
+node packages/integration-tests/learn-04-map-kernel.mjs
+```
+
+สคริปต์นี้อ่านซอร์สอย่างเดียว ไม่ต้องมี `pnpm run-local` รันอยู่
+
+### ผลลัพธ์: แผนที่คลาส
+
+```
+    176  RestoreForgerImpl             913 บรรทัด  ████████
+   1089  OverseerImpl                 5349 บรรทัด  █████████████████████████████████████████████
+   6438  OverseerDurableObject         557 บรรทัด  █████
+   6995  GatekeeperLoopback             42 บรรทัด  █
+   7150  GadgetTailLoopback             83 บรรทัด  █
+   7282  OverseerClientInterface      1682 บรรทัด  ██████████████
+   8964  UseOverseerInterface          238 บรรทัด  ██
+   9202  GadgetClientImpl              273 บรรทัด  ██
+   9633  ApprovalQueueImpl              37 บรรทัด  █
+```
+
+อ่านแผนที่นี้ได้ทันทีว่าไฟล์แบ่งเป็น 3 ชั้น:
+
+| ชั้น | คลาส | หน้าที่ |
+|---|---|---|
+| **ตรรกะ** | `OverseerImpl` (5,349) | ของจริงทั้งหมดอยู่นี่ ไม่ผูกกับ RPC |
+| **เปลือก DO** | `OverseerDurableObject` (557) | จุดเข้าออก จัดการ lifecycle |
+| **หน้ากาก RPC** | `OverseerClientInterface` (1,682) / `UseOverseerInterface` (238) | สิ่งที่ client เรียกได้ **แยกตาม role** |
+
+> 🎓 `ApprovalQueueImpl` — กลไกที่เป็นจุดขายของทั้งผลิตภัณฑ์ — มีแค่ **37 บรรทัด**
+> ของยากอยู่ที่ *ดีไซน์* ไม่ใช่ปริมาณโค้ด
+
+### Data model: 21 collections
+
+```
+  gadgets  gatekeepers  actions  boundHooks  autoApproveTags  observers
+  collaborators  shareKeys  blueprints
+  code  snapshots
+  chats  chatMeta  chatContext  chatCompactions  chatDraftUpdates
+  chatModelData  chatAttachmentContent  activeAgents
+  externalChats  gadgetResponseDeliveries
+```
+
+ทั้งหมดนิยามใน `makeOverseerStorage()` (บรรทัด 753) ผ่าน `packages/typed-storage`
+ซึ่งเป็น **mini-ORM 657 บรรทัด** บน Durable Object storage — มี primary key,
+unique index, non-unique index ครบ
+
+> 💡 นี่คือเหตุผลที่ `typed-storage` เป็น **แพ็กเกจเดียวใน repo ที่ `tsc` emit จริง**
+> (ที่เหลือ `noEmit` เพราะ bundle จาก source) — เพราะ `exports` ของมันชี้ไป `dist/index.js`
+
+### 🔥 บรรทัดที่สำคัญที่สุดในไฟล์
+
+`loadGadgetWorker()` บรรทัด 2366 คือที่ที่โค้ดของ Gadget กลายเป็น Worker จริง:
+
+```js
+return this.env.LOADER.get(`${this.ctx.id}.${codeVersion}.${gadgetId}`, async () => {
+  let modules = {};
+  for (let [file, content] of ydoc.getMap(this.gadgetRootName(gadgetId))) {
+    if (file.endsWith(".js")) modules[file] = content.toString();   // ①
+  }
+  return {
+    mainModule: "server.js",
+    modules,
+    env: this.getEnvForLoader(gadgetId, ...),
+    globalOutbound: null,                                            // ②
+    tails: [this.ctx.exports.GadgetTailLoopback({props: tailProps})],
+  };
+});
+```
+
+**① โมดูลมาจาก Yjs doc ตรง ๆ ไม่มี build step**
+
+CRDT ที่เราอ่านในบทที่ 2 **คือ artifact ที่ deploy จริง** agent แก้ `Y.Text` เสร็จ
+โค้ดใหม่รันได้ทันที ไม่ต้อง compile ไม่ต้อง bundle ไม่ต้อง push
+
+**② `globalOutbound: null` — แซนด์บ็อกซ์ทั้งหมดอยู่ในบรรทัดเดียว**
+
+README บอกว่า *"The server runs in a Dynamic Worker which has had its access to the
+internet disabled"* — และนี่คือทั้งหมดที่ทำ ไม่มี proxy ไม่มี firewall rule
+Workers runtime บังคับให้เอง Gadget ออกเน็ตไม่ได้เลยนอกจากผ่าน binding ที่ใส่ให้ใน `env`
+
+### Facets: กลไกที่ทำให้ทั้งระบบเป็นไปได้
+
+```js
+getGatekeeperFacet(id) {
+  return this.ctx.facets.get(`gatekeeper${id}`, async () => {
+    let cls = this.storage.gatekeepers.get(id)?.class;
+    return {class: cls};
+  });
+}
+```
+
+**Facet = Durable Object ลูกที่รันอยู่ใต้ DO แม่** ทั้ง gadget และ gatekeeper เป็น facet
+ของ workspace ที่ใช้มัน ผลคือ state ของ gatekeeper (pending actions, observers)
+อยู่ติดกับ workspace ไม่ใช่ service กลาง
+
+`getGadgetFacetFetcher()` มีลูกเล่นเพิ่ม: ถ้าสลับ chat ที่มี proposed changes
+มันจะ **abort facet แล้วโหลดใหม่** เพราะโค้ดที่รันเปลี่ยนไป — เป็นวิธี "ลองโค้ดที่ agent เสนอ"
+โดยไม่กระทบ mainline
+
+### 🎓 แพทเทิร์นที่ผมว่าเจ๋งที่สุด: default-deny ตอน compile
+
+`use` กับ `build` **ไม่ได้แยกด้วย if** แต่แยกเป็น **คนละคลาส**:
+
+```js
+class OverseerClientInterface extends RpcTarget implements Overseer { ... }  // build
+class UseOverseerInterface    extends RpcTarget implements Overseer { ... }  // use
+```
+
+คอมเมนต์อ้างไว้แบบนี้:
+
+> *"Default-deny is enforced at compile time: because this class `implements Overseer`,
+> adding any new method to the interface will fail to compile here until a developer
+> consciously decides whether 'use' callers may invoke it."*
+
+**ลองพิสูจน์เอง** — เพิ่มเมธอดปลอมเข้า `Overseer` ใน `packages/workshop-shared/src/api.ts`:
+
+```ts
+/** ทดลอง */
+dangerouslyLeakEverything(): Promise<string>;
+```
+
+แล้วรัน:
+
+```bash
+pnpm --filter @gadgets/workshop-backend exec tsc --noEmit
+```
+
+จะได้:
+
+```
+src/overseer.ts(8964,7): error TS2420: Class 'UseOverseerInterface'
+                          incorrectly implements interface 'Overseer'.
+src/overseer.ts(7282,7): error TS2420: Class 'OverseerClientInterface'
+                          incorrectly implements interface 'Overseer'.
+```
+
+**คอมไพเลอร์บังคับให้ต้องตัดสินใจเรื่องสิทธิ์ ลืมไม่ได้** อย่าลืม revert ด้วยล่ะ
+
+> เป็นเทคนิคที่ยกไปใช้ที่อื่นได้: เวลาต้องการให้ "การเพิ่มของใหม่" ผ่านการทบทวนเสมอ
+> ให้ทำให้มัน *ไม่คอมไพล์* จนกว่าจะมีคนตัดสินใจ
+
+### เจอโค้ดที่ผลิต error ของบทที่ 5
+
+`authorizeObservation()` บรรทัด 2744 — ข้อความที่เราเห็นตอนบทที่ 5 มาจากที่นี่:
+
+```js
+if (description.excludeObservers?.length > 0) {
+  await this.#enforceExcludeObservers(description.excludeObservers);
+}
+```
+
+และ `prohibitAllSharing` (กลไกเก่าที่ observers มาแทน) ก็ยังอยู่เหนือมันหนึ่งชั้น
+สังเกตว่าทั้งสองกลไก **อยู่ก่อน** การบันทึก action record — บล็อกก่อนจด
+
+### Chokepoint: จุดเดียวที่ URL กลายเป็น capability
+
+อยู่คนละไฟล์ ที่ `user.ts:1664` `getGatekeeperClassFor()`:
+
+```js
+// Block whole gatekeepers + disabled resources at this single core-side chokepoint where a
+// resourceUrl becomes a capability (reached only via the user/UI-facing Overseer.newGatekeeper
+// and blueprint instantiation — never from gadget or agent code).
+```
+
+**จุดเดียว** ที่แปลง URL เป็นสิทธิ์ และ gadget/agent เข้าไม่ถึงโดยตรง —
+นี่คือรูปธรรมของ capability-based security ที่ README พูดถึง
+
+### ⚠️ กับดัก
+
+**1. `OverseerImpl` ไม่ใช่ RpcTarget** — มันเป็นตรรกะล้วน ๆ ส่วนที่เปิดให้ client คือ
+`OverseerClientInterface` ที่ห่ออีกที ถ้าไล่โค้ดแล้วงงว่า "เมธอดนี้ client เรียกได้ไหม"
+ให้ดูว่ามันโผล่ในคลาส `*ClientInterface` หรือเปล่า
+
+**2. `applyPendingAction` มี call site อยู่ก่อนจุดนิยาม** — `grep` เจอบรรทัด 1409 ก่อน
+ทั้งที่ของจริงอยู่ 2579 (สคริปต์แผนที่จับเฉพาะจุดนิยามให้แล้ว) เวลาไล่โค้ดในไฟล์ใหญ่
+อย่าเชื่อ match แรก
+
+**3. คอมเมนต์อ้างชื่อไฟล์ที่ถูกเปลี่ยนไปแล้ว** — 4 จุดในไฟล์นี้อ้าง
+`observers-implementation-plan.md` แต่ไฟล์จริงชื่อ `docs/observers.md`
+เจอตอนไล่ตามคอมเมนต์แล้วหาไฟล์ไม่เจอ:
+
+```bash
+grep -n 'observers-implementation-plan' packages/workshop-backend/src/overseer.ts
+# 397, 2761, 6046, 6092
+```
+
+### 🎓 ทำไมไฟล์หมื่นบรรทัดถึงอ่านไหว
+
+```
+โค้ด      6,817  69.9%
+คอมเมนต์  1,815  18.6%   ← สูงผิดปกติ
+บรรทัดว่าง 1,114  11.4%
+```
+
+**เกือบ 1 ใน 5 เป็นคอมเมนต์** และเกือบทั้งหมดอธิบาย **"ทำไม"** ไม่ใช่ "ทำอะไร" —
+มีทั้งเหตุผลที่เลือกทางนี้ ทางที่ลองแล้วไม่เวิร์ก และ TODO ที่ยอมรับข้อจำกัดตัวเองตรง ๆ
+
+อ่านเฉพาะคอมเมนต์อย่างเดียวก็เข้าใจดีไซน์ได้เกินครึ่ง นี่คือเหตุผลที่ `AGENTS.md`
+กล้าตั้งกติกาว่า reviewer ต้องอ่านทุกบรรทัด — เพราะมันเขียนมาให้อ่าน
+
+### 📝 แบบฝึกหัด
+
+1. ทำการทดลอง default-deny ข้างบนให้จบ (เพิ่มเมธอด → tsc → revert)
+   แล้วลองตอบ: ทำไม `subscribeToConsoleLogs()` ถึงคืน subscription เปล่า ๆ
+   แทนที่จะ throw "Unauthorized"?
+2. เปิด `getEnvForLoader()` แล้วไล่ดูว่า Gadget ได้ binding อะไรเข้าไปใน `env` บ้าง
+   — เทียบกับ `globalOutbound: null` แล้วสรุปว่า gadget ออกไปข้างนอกได้ทางไหนบ้าง
+3. `RestoreForgerImpl` (บรรทัด 176) เป็น capability ที่ส่งให้ **เฉพาะ `executeCode`**
+   ไม่เคยส่งให้ gadget worker — อ่านคอมเมนต์เหนือคลาสแล้วตอบว่า ทำไมการที่มัน
+   "resolve binding name ฝั่ง overseer" ถึงทำให้ capability นี้ไม่เพิ่มสิทธิ์ให้ใครเลย
+   (เป็นตัวอย่างที่ดีมากของการออกแบบ capability ให้ปลอดภัยโดยโครงสร้าง)
+4. หา `#autoApprovalDrainer` แล้วอ่านคอมเมนต์เรื่อง "single-flight" —
+   มันกันอะไร และทำไม DO input gate ถึงกันให้ไม่ได้เอง?
+
+---
+
+## บทที่ 7: ไปต่อทางไหน
+
+ผ่านเคอร์เนลมาแล้ว เหลือสามด้านหลักที่ยังไม่ได้แตะ
 
 | ลำดับ | เป้าหมาย | ไฟล์ |
 |---|---|---|
-| 1 | สัญญากลางของทั้งระบบ | `packages/workshop-shared/src/api.ts` (3,535 บรรทัด) |
-| 2 | **เคอร์เนล** | `packages/workshop-backend/src/overseer.ts` (9,745 บรรทัด) |
-| 3 | agent loop / Code Mode / compaction | `packages/workshop-backend/src/agent.ts` (3,310 บรรทัด) |
-| 4 | Blueprint / sharing | `docs/blueprints.md`, `docs/sharing.md` |
+| 1 | สัญญากลางของทั้งระบบ — อ่านทั้งไฟล์ ไม่ใช่แค่ส่วนที่ใช้ | `packages/workshop-shared/src/api.ts` (3,535 บรรทัด) |
+| 2 | agent loop / Code Mode / compaction | `packages/workshop-backend/src/agent.ts` (3,310 บรรทัด) |
+| 3 | Blueprint / sharing | `docs/blueprints.md`, `docs/sharing.md` |
 
 **อย่าข้าม `AGENTS.md`** — ยาวเป็นพันบรรทัด อธิบายเหตุผลเชิงสถาปัตยกรรมและ trade-off
 ละเอียดกว่า `README.md` มาก รวมถึงเรื่อง build cache, tsgo single-threaded, release pipeline
@@ -735,6 +964,7 @@ overlay/packages/integration-tests/
   learn-01-explore-api.mjs                   ← บทที่ 1
   learn-02-blueprint-code.mjs                ← บทที่ 2
   learn-03-gadget-api.mjs                    ← บทที่ 3
+  learn-04-map-kernel.mjs                    ← บทที่ 6
   fixtures/gatekeeper-notes/wrangler.jsonc   ← บทที่ 4
   fixtures/gatekeeper-notes/src/notes-gatekeeper.ts
   __tests__/notes-approval.test.ts           ← บทที่ 4
@@ -772,3 +1002,5 @@ overlay/packages/integration-tests/
 5. **เริ่มด้วยสิทธิ์ศูนย์เสมอ** ทั้ง agent และ gadget ต้องถูก "แนะนำ" ให้รู้จักทรัพยากรทีละอย่าง
 6. **ข้อมูลที่อ่านเข้ามาแล้วผูกกับ "ใครเห็น gadget นี้ได้"** — `addObserver()` คุมคนที่มาทีหลังข้อมูล
    `excludeObservers` คุมข้อมูลที่มาทีหลังคน ทั้งคู่ให้ gatekeeper เป็นเจ้าของคำตัดสินเรื่อง ACL
+7. **แซนด์บ็อกซ์ทั้งหมดคือ `globalOutbound: null` บรรทัดเดียว** และสิทธิ์ตาม role แยกด้วย
+   *คนละคลาส* ไม่ใช่ `if` — คอมไพเลอร์เลยบังคับให้ทบทวนทุกครั้งที่เพิ่มเมธอดใหม่
