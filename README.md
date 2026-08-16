@@ -1,7 +1,7 @@
 # เรียน Cloudflare OS แบบลงมือทำ (ฉบับภาษาไทย)
 
 คู่มือเรียน [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) ภาษาไทย แบบลงมือทำ
-บทที่ 0–8 พร้อมสคริปต์และ fixture ที่รันได้จริง
+บทที่ 0–9 พร้อมสคริปต์และ fixture ที่รันได้จริง
 
 > ⚠️ repo นี้ **ไม่ใช่ของ Cloudflare** และไม่ได้รับการรับรองจาก Cloudflare
 > เป็นบันทึกการเรียนที่เขียนขึ้นเพื่อให้คนอื่นเดินตามได้โดยไม่ต้องลองผิดลองถูกซ้ำ
@@ -49,9 +49,10 @@ git clone https://github.com/monthop-gmail/learning-th-cloudflare-os.git
 | [5](#บทที่-5-observers--ใครมีสิทธิ์-เห็น-สิ่งที่-gadget-อ่านมา) | Observers — ใครมีสิทธิ์เห็นสิ่งที่ Gadget อ่านมา | ไม่ | 45 นาที |
 | [6](#บทที่-6-เข้าเคอร์เนล--overseerts-9745-บรรทัด) | เข้าเคอร์เนล — `overseer.ts` 9,745 บรรทัด | ไม่ | 60 นาที |
 | [7](#บทที่-7-agent--code-mode-prompt-และ-context-compaction) | Agent — Code Mode, prompt, compaction | ไม่ | 45 นาที |
-| [8](#บทที่-8-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
+| [8](#บทที่-8-blueprints-กับ-sharing--แจกโค้ด-vs-แจกสิทธิ์) | Blueprints กับ Sharing — แจกโค้ด vs แจกสิทธิ์ | ไม่ | 45 นาที |
+| [9](#บทที่-9-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
 
-> 💡 บทที่ 0–7 **ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
+> 💡 บทที่ 0–8 **ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
 > ของ repo นี้คือสถาปัตยกรรม ไม่ใช่ตัวโมเดล
 
 ---
@@ -1133,14 +1134,178 @@ seen an agent generate a file edit and executeCode on the same step, though"* �
 
 ---
 
-## บทที่ 8: ไปต่อทางไหน
+## บทที่ 8: Blueprints กับ Sharing — แจกโค้ด vs แจกสิทธิ์
 
-ผ่านเคอร์เนลครบทั้ง overseer และ agent แล้ว เหลือสองด้านหลัก
+สองวิธีที่ต่างกันคนละขั้วในการ "แชร์" ของที่คุณสร้าง:
+
+| | Blueprint | Collaborator |
+|---|---|---|
+| แจกอะไร | **สำเนาโค้ด** | **สิทธิ์เข้าถึงของจริง** |
+| ผู้รับได้ | gadget ของตัวเอง แยก storage แยกบัญชี | เข้ามาทำงานในของคุณ |
+| เทียบกับ | ดาวน์โหลดแอปมาลง | แชร์ Google Doc |
+
+อ่านคู่กับ [`docs/sharing.md`](https://github.com/cloudflare/cloudflare-os/blob/main/docs/sharing.md)
+และ [`docs/blueprints.md`](https://github.com/cloudflare/cloudflare-os/blob/main/docs/blueprints.md)
+
+```bash
+pnpm --filter @gadgets/workshop-backend build:format-blueprints   # ถ้ายังไม่เคยรัน
+pnpm --filter @gadgets/integration-tests exec vitest run __tests__/sharing-blueprints.test.ts
+```
+
+ควรได้ `Tests 4 passed (4)` ใน ~26 วินาที
+
+### 🔑 แนวคิดเดียวที่ต้องเข้าใจ: สิทธิ์ = "เดินถึงเจ้าของได้ไหม"
+
+ระบบสิทธิ์ทั้งหมดตั้งอยู่บนประโยคเดียว:
+
+> *"Access is determined by **reachability from the owner**, recomputed live at every `open()`"*
+
+ไม่มีตาราง "ใครมีสิทธิ์อะไร" ที่ต้องคอยดูแลให้ตรง มีแค่กราฟของเส้นที่บอกว่า
+"ใครแบ่งสิทธิ์ให้ใคร" แล้วคำนวณสดทุกครั้งที่เปิด
+
+**ผลที่ตามมาคือการถอนสิทธิ์กลายเป็นเรื่องง่ายอย่างน่าประหลาด**
+
+### สิ่งที่เทสต์พิสูจน์
+
+**1. ถอด bob ออก แล้ว carol หลุดตามเอง**
+
+```
+alice ──build──► bob ──build──► carol      carol ไม่มีเส้นตรงจาก alice เลย
+```
+
+พอ alice ถอด bob ระบบ **ตัดแค่เส้นที่ให้สิทธิ์ bob เท่านั้น** ไม่ได้ไปไล่ลบ carol —
+แต่ carol เปิดไม่ได้แล้ว เพราะเดินจากเจ้าของมาไม่ถึง
+
+เอกสารเขียนไว้สั้น ๆ ว่า **“Nothing cascades.”**
+
+**2. ใส่ bob กลับ แล้ว carol กลับมาเอง**
+
+นี่คือของแถมที่ได้ฟรีจากดีไซน์ข้อ 1 — เส้นที่ bob เคยแบ่งให้ carol **ไม่เคยถูกลบ**
+พอ bob กลับมามีเส้นถึงเจ้าของ carol ก็กลับมาด้วยทันที
+
+> ถ้าเผลอถอดคนที่เคยแชร์ต่อให้อีกห้าคน แค่ใส่เขากลับ ทั้งห้าคนก็กลับมาครบ
+> ไม่ต้องมานั่งเชิญใหม่ทีละคน
+
+**3. บางครั้งไม่ได้หลุด แค่ถูกลดชั้น**
+
+```
+alice ──build──► bob ──build──► carol
+  └────use──────────────────────►┘        carol มีสองเส้น
+```
+
+`effective role` = **max ของทุกเส้น** → carol ได้ `build`
+พอถอด bob เส้น build หายไป แต่เส้น `use` ยังอยู่ → carol **ถูกลดชั้นเป็น `use`** ไม่ใช่ตัดขาด
+
+เทสต์เช็คทั้ง `oldRole` และ `newRole` ที่ระบบรายงานกลับมา — มันรู้ตัวว่าใครกระทบบ้าง
+ไม่ได้ปล่อยให้หลุดเงียบ ๆ
+
+**4. `use` collaborator ถูกจำกัดจริง**
+
+```js
+await daveOverseer.getMetadata();        // ✓ ได้ title, role
+await daveOverseer.listChats();          // ✗ Unauthorized
+await daveOverseer.listBlueprints();     // ✗ Unauthorized
+await daveOverseer.addCollaborator(...); // ✗ Unauthorized
+await daveOverseer.createShareLink(...); // ✗ Unauthorized
+```
+
+**5. Blueprint พาโค้ดไป แต่ไม่พาข้อมูลไป**
+
+alice เขียนเอกสารว่า *"ความลับของ alice"* → ปั้นเป็น blueprint → bob สร้าง gadget จาก blueprint นั้น
+→ bob ได้เอกสาร **เปล่า** ส่วนของ alice ยังอยู่ครบ
+
+เอกสารระบุว่า blueprint จับ *"code but not the chat history, SQLite storage, or credentials"*
+— และ SQLite ของ gadget อยู่ใน Durable Object ของ workspace ตัวเอง จึงแยกกันโดยโครงสร้าง
+ไม่ต้องมีโค้ดคอยกรอง
+
+### 🎓 ทำไมถึงกล้าไม่ cascade
+
+คำตอบอยู่ที่คำเดียว: **การคำนวณสดคือแหล่งความจริงเพียงแหล่งเดียว**
+
+> *"there is no eager cleanup whose bugs could grant access to an unreachable user"*
+
+ถ้าออกแบบให้ตอนถอดสิทธิ์ต้องไล่ลบเป็นทอด ๆ บั๊กที่ลบไม่ครบ = ช่องโหว่ความปลอดภัย
+แต่พอไม่มีการลบเลย บั๊กแบบนั้นก็เกิดไม่ได้ — สิ่งที่ค้างอยู่ในสตอเรจไม่มีผลต่อสิทธิ์
+
+ราคาที่จ่ายคือ **ข้อมูลคนที่ถูกถอดจะค้างสะสม** เอกสารยอมรับตรง ๆ และบอกว่าไว้ค่อยทำ GC ทีหลัง
+
+### ⚡ session ที่เปิดค้างอยู่ล่ะ?
+
+จุดที่ผมชอบ: ระบบตรวจสิทธิ์เฉพาะตอน `open()` ไม่ได้ตรวจทุกข้อความ
+แล้วคนที่เพิ่งโดนถอดแต่ยังเปิดหน้าจอค้างอยู่ล่ะ?
+
+คำตอบคือ **สั่ง restart Durable Object ทิ้งเลย** (`ctx.abort()`) ทุกคนหลุดหมด แล้วต่อใหม่
+ซึ่งทำให้ทุกคน `open()` ใหม่ด้วยกราฟที่อัปเดตแล้ว
+
+และมีรายละเอียดที่บอกว่าเจอของจริงมา — สอง precaution รอบ ๆ การ abort:
+
+1. `ctx.storage.sync()` ก่อน เพราะ *"`ctx.abort()` does not respect the output gate"*
+   ไม่งั้น restart กลับมาอาจไม่มีการเปลี่ยนแปลงที่เพิ่งทำ
+2. หน่วง ~100ms ก่อน abort เพื่อให้คำตอบของ RPC ที่สั่งถอดวิ่งกลับถึงคนสั่ง —
+   ซึ่งมักคือเจ้าของที่ต่ออยู่ด้วย — ก่อนที่การเชื่อมต่อของเขาเองจะขาด
+
+### 🔐 share link เก็บแบบไม่เก็บ
+
+ระบบเก็บแค่ HMAC-SHA-256 ของ key ไม่ได้เก็บ key จริง ผลคือ:
+
+- เซิร์ฟเวอร์ **สร้างลิงก์เดิมขึ้นมาใหม่ไม่ได้** ต่อให้อยากทำ
+- ฐานข้อมูลรั่ว ก็ไม่ได้ key ที่ใช้ได้
+- กด "copy link" อีกครั้ง = **สร้าง key ใหม่** ให้ลิงก์เดิม ไม่ใช่ดึงของเก่ามาแสดง
+
+ลิงก์หนึ่งอันมีได้หลาย key และ revoke ทีเดียวตายทั้งชุด
+
+### ⚠️ กับดัก
+
+**1. `startHarness` ลบ `worker_loaders` ทิ้ง**
+
+harness จงใจตัดออกเพราะเทสต์ส่วนใหญ่ไม่รันโค้ดของ gadget แต่เคส blueprint ต้อง
+`connectToGadget()` ซึ่งต้องโหลด Worker จริง ๆ อาการคือ error งง ๆ จากชั้น serialize:
+
+```
+TypeError: Cannot read properties of undefined (reading 'get')
+  at Evaluator.evaluateImpl (capnweb/src/serialize.ts)
+```
+
+(ที่จริงคือ `env.LOADER` เป็น `undefined`) ทางแก้: `patchWorkshop` รัน **หลัง** การลบ ใส่กลับได้
+
+```js
+patchWorkshop: config => { config.worker_loaders = [{ binding: "LOADER" }]; },
+```
+
+**2. ห้าม `import { ... } from "capnweb"` ในแพ็กเกจนี้**
+
+repo มีกฎ lint เฉพาะทางที่อนุญาตแค่ `src/rpc-client.ts` ไฟล์เดียว เหตุผลอยู่ในตัวข้อความ error:
+
+> *"a consumer repo can hold two capnweb copies, and a stub from the wrong one fails to serialise"*
+
+และร้ายกว่านั้นคือมันพังเฉพาะตอน install แยกกัน — **เครื่อง dev ไม่เจอ CI เจอ**
+ให้ mint stub ผ่าน `stubFor()` เท่านั้น (`import type` ยังทำได้)
+
+**3. `AffectedCollaborator` ใช้ field ชื่อ `profile` ไม่ใช่ `user`**
+
+**4. `use` ไม่ได้แปลว่า "ดูอย่างเดียว"** — เรียก `connectToGadget()` ได้ แปลว่ากดปุ่มในแอป
+แล้วเปลี่ยนข้อมูลได้จริง แค่แก้โค้ดกับดูแชทไม่ได้
+
+### 📝 แบบฝึกหัด
+
+1. ลอง `previewRemoveCollaborator()` ก่อนถอดจริง แล้วเทียบผลกับสิ่งที่เกิดขึ้นจริง —
+   เอกสารบอกว่า UI ใช้เตือนว่า "ถอด bob แล้ว carol จะหลุดด้วยนะ"
+2. อ่าน `keepUsers` ใน `docs/sharing.md` แล้วลองใช้: ถอด bob แต่เก็บ carol ไว้
+   แล้วดูว่าระบบสร้างเส้นใหม่ให้ carol จากใคร
+3. สร้างวงกลม: alice→bob, bob→carol, carol→bob แล้วถอด bob
+   fixed-point algorithm จะจบยังไง? (คำใบ้: *"Roles only ever increase"*)
+4. เทียบ `revokeShareLink()` กับ `removeCollaborator()` — ทำไมอันหนึ่งใช้ธง `revoked`
+   แต่อีกอันลบเส้นทิ้ง?
+
+---
+
+## บทที่ 9: ไปต่อทางไหน
+
+ผ่านเคอร์เนล agent และระบบสิทธิ์มาครบแล้ว เหลือสองอย่าง
 
 | ลำดับ | เป้าหมาย | ไฟล์ |
 |---|---|---|
 | 1 | สัญญากลางของทั้งระบบ — อ่านทั้งไฟล์ ไม่ใช่แค่ส่วนที่ใช้ | `packages/workshop-shared/src/api.ts` (3,535 บรรทัด) |
-| 2 | Blueprint / sharing | `docs/blueprints.md`, `docs/sharing.md` |
 
 **อย่าข้าม `AGENTS.md`** — ยาวเป็นพันบรรทัด อธิบายเหตุผลเชิงสถาปัตยกรรมและ trade-off
 ละเอียดกว่า `README.md` มาก รวมถึงเรื่อง build cache, tsgo single-threaded, release pipeline
@@ -1174,6 +1339,7 @@ overlay/packages/integration-tests/
   fixtures/gatekeeper-notes/src/notes-gatekeeper.ts
   __tests__/notes-approval.test.ts           ← บทที่ 4
   __tests__/notes-observers.test.ts          ← บทที่ 5
+  __tests__/sharing-blueprints.test.ts       ← บทที่ 8
 ```
 
 ทุกไฟล์เขียนคอมเมนต์ภาษาไทยไว้ อ่านเป็นบทเรียนต่อได้เลย
@@ -1211,3 +1377,5 @@ overlay/packages/integration-tests/
    *คนละคลาส* ไม่ใช่ `if` — คอมไพเลอร์เลยบังคับให้ทบทวนทุกครั้งที่เพิ่มเมธอดใหม่
 8. **โค้ดที่ AI เขียนกับโค้ดของแอป ใช้แซนด์บ็อกซ์ตัวเดียวกัน** จึงมีโมเดลความปลอดภัย
    ชุดเดียวให้ดูแล และ agent มีแค่ 13 tools เพราะ `executeCode` ทำแทนได้เกือบหมด
+9. **สิทธิ์คือ "เดินถึงเจ้าของได้ไหม" คำนวณสดทุกครั้งที่เปิด** ไม่มีตารางสิทธิ์ให้ดูแล
+   ถอนสิทธิ์เลยแค่ตัดเส้นเดียว ไม่ต้อง cascade — และใส่กลับก็คืนสภาพเดิมได้ทันที
