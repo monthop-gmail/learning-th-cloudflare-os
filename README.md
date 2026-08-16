@@ -1,7 +1,7 @@
 # เรียน Cloudflare OS แบบลงมือทำ (ฉบับภาษาไทย)
 
 คู่มือเรียน [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) ภาษาไทย แบบลงมือทำ
-บทที่ 0–12 พร้อมสคริปต์และ fixture ที่รันได้จริง
+บทที่ 0–13 พร้อมสคริปต์และ fixture ที่รันได้จริง
 
 > ⚠️ repo นี้ **ไม่ใช่ของ Cloudflare** และไม่ได้รับการรับรองจาก Cloudflare
 > เป็นบันทึกการเรียนที่เขียนขึ้นเพื่อให้คนอื่นเดินตามได้โดยไม่ต้องลองผิดลองถูกซ้ำ
@@ -53,10 +53,11 @@ git clone https://github.com/monthop-gmail/learning-th-cloudflare-os.git
 | [9](#บทที่-9-รันบน-workerd-เอง--ไล่หาว่า-coming-soon-ติดตรงไหน) | รันบน workerd เอง — ไล่หาว่า "COMING SOON" ติดตรงไหน | ไม่ | 45 นาที |
 | [10](#บทที่-10-เทียบ-agent-loop--cloudflare-os-กับ-coding-agent-ที่คุณใช้อยู่) | เทียบ agent loop กับ coding agent ที่คุณใช้อยู่ | ไม่ | 30 นาที |
 | [11](#บทที่-11-ลอง-agent-จริง--ที่อ่านมาสิบบทตรงไหม) | ลอง agent จริง — ที่อ่านมาสิบบทตรงไหม | **ต้องมี** | 30 นาที |
-| [12](#บทที่-12-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
+| [12](#บทที่-12-เอามาใช้กับ-github-workflow-เดิมของทีมได้ไหม) | เอามาใช้กับ GitHub workflow เดิมของทีมได้ไหม | ไม่ | 30 นาที |
+| [13](#บทที่-13-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
 
-> 💡 **บทที่ 0–10 ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
-> ของ repo นี้คือสถาปัตยกรรม ไม่ใช่ตัวโมเดล — มีแค่บทที่ 11 บทเดียวที่ต้องใช้
+> 💡 **มีแค่บทที่ 11 บทเดียวที่ต้องใช้ API key ของ LLM** ตั้งใจออกแบบมาแบบนั้น
+> เพราะส่วนที่น่าเรียนที่สุดของ repo นี้คือสถาปัตยกรรม ไม่ใช่ตัวโมเดล
 
 ---
 
@@ -1885,7 +1886,186 @@ generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash
 
 ---
 
-## บทที่ 12: ไปต่อทางไหน
+## บทที่ 12: เอามาใช้กับ GitHub workflow เดิมของทีมได้ไหม
+
+คำถามที่ทีมถามก่อนตัดสินใจ: *"ปกติเราให้ AI ดึง issue/PR มาทำงาน มี CI/CD ครบ
+ถ้ามาใช้ Cloudflare OS ยังใช้ระบบเดิมได้ไหม แล้วมันทำงานกับ repo ของเราหรือเปล่า"*
+
+**คำตอบสั้น: ใช้ได้ แต่มันไม่ได้มาแทนของเดิม — มันเป็นคนละเลเยอร์**
+
+มีสองทิศทางที่คนมักปนกัน แล้วคำตอบต่างกันคนละขั้ว
+
+```bash
+node packages/integration-tests/learn-07-gatekeeper-surface.mjs github
+```
+
+---
+
+### ✅ ทิศทาง A — Cloudflare OS ไปทำงานกับ repo ของทีม (ทำได้ดี)
+
+```
+ผูกได้ที่ระดับ:
+   GitHub Repository     https://github.com/:owner/:repo
+   GitHub Issue          https://github.com/:owner/:repo/issues/:number
+   GitHub Pull Request   https://github.com/:owner/:repo/pull/:number
+```
+
+| งาน | เมธอด |
+|---|---|
+| อ่าน | `listIssues` `searchIssues` `listPullRequests` `searchPullRequests` `getDetails` `readDiff` `readDiffThreads` `readDiscussion` |
+| เขียน | `createIssue` `createPullRequest` `setTitle` `setBody` `addLabels` `removeLabels` `close` `reopen` `postComment` `postReview` `replyToDiffComment` `merge` |
+
+**ทุกตัวในคอลัมน์ "เขียน" ผ่านคิวอนุมัติ** (บทที่ 4) — มี audit log ครบและต้องมีคนกดอนุมัติ
+ซึ่งเข้มกว่า coding agent ทั่วไปที่ยิง `gh` ตรง ๆ
+
+จุดที่ดีกว่าที่คาด: **ผูกได้ทีละ issue หรือทีละ PR** ไม่จำเป็นต้องเปิดทั้ง repo
+ถ้าจะให้ agent สรุป PR เดียว ก็ให้เห็นแค่ PR นั้น
+
+---
+
+### ⚠️ เพดานสำคัญ: **มันเขียนโค้ดลงรีโปไม่ได้**
+
+ไล่ `packages/gatekeeper-github/src/types.d.ts` ทั้งไฟล์แล้ว
+**ไม่มีเมธอดแตะไฟล์ / commit / branch / push / tree / blob เลยสักตัว**
+
+ดู signature นี้ให้ดี:
+
+```ts
+createPullRequest({ title, head, base, ... })
+//                        ↑ "The branch containing your changes"
+```
+
+**มันเปิด PR จาก branch ที่มีอยู่แล้ว — ไม่ได้สร้าง branch และไม่ได้ push commit ให้**
+
+และไม่มี API แตะ CI ด้วย (ไม่มี workflow dispatch, ไม่มี check run)
+
+> 🎯 **แปลว่า coding agent เดิมของทีมยังต้องอยู่** สำหรับเขียนโค้ด → push → CI
+> Cloudflare OS ทำงาน **รอบ ๆ** repo ไม่ได้ทำงาน **ใน** repo
+
+---
+
+### ❌ ทิศทาง B — เอาโค้ดที่สร้างใน Cloudflare OS เข้ารีโปทีม (ไม่ได้)
+
+grep หา git ทั้ง `workshop-backend` — **ไม่มีเลย** โค้ด Gadget อยู่ใน Yjs doc
+ในDurable Object (บทที่ 2, 6)
+
+ทางออกของโค้ดมีแค่สองทาง:
+
+- `.gadget` archive ผ่าน `downloadBlueprint()` / `importBlueprint()`
+- PDF ผ่าน `exportPdf()`
+
+**ไม่มี branch / PR / code review / CI สำหรับโค้ด Gadget**
+
+> ⚠️ **ระวังสับสนคำว่า "merge"** — Cloudflare OS มี `mergeChanges()` (บทที่ 11)
+> แต่นั่นคือการรับข้อเสนอของ agent เข้า mainline ของ *workspace ตัวเอง*
+> **คนละเรื่องกับ git merge โดยสิ้นเชิง**
+
+และนี่ **ไม่ใช่ช่องโหว่ที่รอเติม** — README เถียงไว้ตรง ๆ ว่าทุกคนรันสำเนาของตัวเอง
+ในแซนด์บ็อกซ์ จึงไม่ต้องมีรีวิว *"it's totally safe to do so"*
+
+---
+
+### 🧭 แล้วควรแบ่งงานยังไง
+
+| งาน | อยู่ที่ไหน | เพราะ |
+|---|---|---|
+| ผลิตภัณฑ์/บริการจริง | **GitHub + CI เหมือนเดิม** | ต้องรีวิว ต้อง audit ต้อง rollback |
+| Dashboard ดู issue/PR ของทีม | **Cloudflare OS** | ไม่ต้อง deploy ไม่ต้อง CI |
+| ตัวช่วย triage / สรุป PR / จัด label | **Cloudflare OS** | gatekeeper ทำได้พอดี + มี audit log |
+| เครื่องมือใช้ครั้งเดียว / ต่อคน | **Cloudflare OS** | ไม่คุ้มจะเปิด repo ใหม่ |
+| อะไรที่ต้องมีคนรีวิวโค้ดก่อนคนอื่นใช้ | **อย่าเอาไปไว้ใน Gadget** | ไม่มีกลไกรีวิวให้ |
+
+> **เกณฑ์ตัดสินข้อเดียว: ถ้าโค้ดนั้นต้องมีคนอนุมัติก่อนคนอื่นใช้ → มันต้องอยู่ใน git**
+
+---
+
+### 🔬 ตรวจเองก่อนตัดสินใจ — อย่าเชื่อชื่อ gatekeeper
+
+`learn-07-gatekeeper-surface.mjs` พ่นรายการเมธอดของ gatekeeper ทุกตัว
+รันไม่ต้องมีเซิร์ฟเวอร์ ไม่ต้องมี OAuth
+
+สิ่งที่น่าสนใจไม่ใช่รายการที่มี แต่คือ **สิ่งที่ไม่อยู่ในรายการ**
+
+> ⚠️ **แต่การแยก อ่าน/เขียน ในสคริปต์เป็นการเดาจากชื่อเมธอด ไม่ใช่ความจริงจากโค้ด**
+> `callService`, `turnOn`, `play`, `follow`, `trash` ล้วนมีผลข้างเคียงแต่หลุดเกณฑ์
+>
+> **ความจริงอยู่ที่จุดเรียก `submitAction()`** — เรียก `submitAction` = ต้องอนุมัติ,
+> เรียก `authorizeObservation` = แค่จดลง log เช็คแบบนี้:
+>
+> ```bash
+> grep -rc 'submitAction(' packages/gatekeeper-*/src/*.ts
+> ```
+
+ผมตรวจของจริงแล้ว ได้ผลที่ **ต่างจากที่ heuristic เดา** ในทางที่น่าสนใจ:
+
+| gatekeeper | เขียนได้จริงไหม | สิ่งที่พบ |
+|---|---|---|
+| `slack` | **ไม่ได้เลย** | 0 จุดเรียก `submitAction` — อ่านอย่างเดียวจริง โพสต์ข้อความไม่ได้ |
+| `supabase` | **ได้ และแรงมาก** | `execute(sql, params)` = รัน SQL อะไรก็ได้ ผ่านคิวอนุมัติ |
+| `zoominfo` | **ได้ แต่ไม่ใช่การแก้ข้อมูล** | สิ่งที่ต้องอนุมัติคือ **การใช้เครดิต** (`worstCaseCredits`) |
+| `github` | 12 เมธอด | แต่ไม่มีตัวไหนแตะโค้ด |
+| `linear` | 16 เมธอด | ครบสุดสำหรับงานจัดการงาน |
+
+> 🎓 **`zoominfo` คือกรณีที่สอนเยอะที่สุด** — สิ่งที่ต้องขออนุมัติไม่ใช่การเปลี่ยนแปลงข้อมูล
+> แต่คือ **การใช้เงิน** โมเดล "action ที่มีผลข้างเคียง" ครอบคลุมเรื่องค่าใช้จ่ายด้วย
+> ไม่ใช่แค่การเขียนข้อมูล
+
+> 💡 อีกจุดที่ต้องระวังเวลานับ: gatekeeper ส่วนใหญ่มีจุดเรียก `submitAction` แค่ **จุดเดียว**
+> เพราะรวมทุก write ผ่าน helper ตัวเดียว (เช่น `submitActionForApproval` ของ github)
+> **จำนวนจุดเรียกจึงไม่ใช่จำนวนสิ่งที่เขียนได้**
+
+---
+
+### 🔧 ถ้าจะลองจริง ต้องเตรียมอะไร
+
+GitHub Gatekeeper ต้องมี **OAuth App ของทีมเอง** (คู่มือเต็มอยู่ใน
+`packages/gatekeeper-github/README.md`)
+
+⚠️ จุดที่คนพลาดบ่อยจนเขาต้องเตือนตัวหนา:
+
+> **"Use a GitHub *OAuth App*, not a GitHub *App*."**
+> GitHub App (client id ขึ้นต้น `Iv…`) จะไม่สนใจ `scope` แล้วพังตอนอ่านอีเมล
+
+scope ที่ขอ: **`repo read:user user:email`**
+
+`repo` เป็น scope กว้าง — เข้าถึงได้ทุก repo ที่คนนั้นเข้าถึงได้ แต่มีสองชั้นจำกัดต่อ:
+
+1. **capability** — ผูกได้ทีละ repo/issue/PR ที่ผู้ใช้เลือกเท่านั้น (บทที่ 6)
+2. **observer check** — แชร์ gadget ให้คนที่ไม่มีสิทธิ์อ่าน repo นั้นไม่ได้ (บทที่ 5)
+
+ทีมที่ใช้ Linear จัด milestone มี `gatekeeper-linear` ให้ด้วย (เขียนได้ 16 เมธอด)
+
+---
+
+### 💡 ข้อเสนอสำหรับการทดลองครั้งแรก
+
+เริ่มจากอันที่ **ไม่ทับ workflow เดิมเลย**:
+
+> ให้ Cloudflare OS สร้าง dashboard อ่าน issue/PR ของ repo ทีม แล้วสรุปสถานะ
+
+- เห็นค่าทันที ไม่แตะของเดิม
+- ได้ทดสอบ approval queue กับ observer ไปพร้อมกัน
+- ถ้าไม่เวิร์กก็ทิ้งได้ ไม่มีอะไรผูกมัด
+
+ถ้าผ่านค่อยขยับไปงานที่มีการเขียน เช่นให้ช่วยจัด label หรือร่างคอมเมนต์สรุป PR
+
+---
+
+### 📝 แบบฝึกหัด
+
+1. รัน `learn-07-gatekeeper-surface.mjs` ทุกตัว แล้วหาว่ามี gatekeeper ไหนอีก
+   ที่ "ชื่อดูทำได้เยอะ แต่จริง ๆ อ่านอย่างเดียว"
+2. เปิด `packages/gatekeeper-github/src/github.ts` หา `submitAction(` ทุกจุด
+   แล้วเทียบกับรายการ "เขียน" ที่สคริปต์เดา — ตรงกันไหม ผิดกี่ตัว
+3. ออกแบบบนกระดาษ: ถ้าอยากให้ agent ใน Cloudflare OS เขียนโค้ดลง repo ได้จริง
+   จะต้องเพิ่มอะไรใน gatekeeper บ้าง และมันจะพัง security model ตรงไหน
+   (คำใบ้: บทที่ 5 เรื่อง observer กับโค้ดที่ push ไปแล้ว)
+4. คำถามให้ทีมถกกัน: เครื่องมือภายในของทีมตอนนี้กี่ตัวที่ **ไม่เคยผ่าน code review จริง ๆ**
+   ถ้าคำตอบคือ "หลายตัว" — Gadget อาจเป็นที่ที่เหมาะกว่า repo สำหรับของพวกนั้น
+
+---
+
+## บทที่ 13: ไปต่อทางไหน
 
 อ่านครบทุกด้านหลักแล้ว เหลืออย่างเดียวที่ยังไม่ได้ลอง
 
@@ -1924,6 +2104,7 @@ overlay/packages/integration-tests/
   learn-06-bare-workerd.mjs                  ← บทที่ 9
   try-agent.mjs                              ← บทที่ 11
   inspect-shared.mjs                         ← บทที่ 11
+  learn-07-gatekeeper-surface.mjs            ← บทที่ 12
   workerd-demo/{config.capnp,main.js}        ← บทที่ 9
   fixtures/gatekeeper-notes/wrangler.jsonc   ← บทที่ 4
   fixtures/gatekeeper-notes/src/notes-gatekeeper.ts
