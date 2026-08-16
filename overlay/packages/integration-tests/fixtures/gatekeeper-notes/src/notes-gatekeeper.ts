@@ -82,6 +82,31 @@ export class NotesStore extends DurableObject<Cloudflare.Env> {
     const at = notes.lastIndexOf(text);
     if (at >= 0) this.ctx.storage.kv.put(key, [...notes.slice(0, at), ...notes.slice(at + 1)]);
   }
+
+  // --- ACL ของ "บริการภายนอก" — เก็บรวมไว้ที่นี่เหมือน TestControl ใน fixture เดิม ---
+
+  /**
+   * ตั้งสิทธิ์ของสมุดเล่มหนึ่ง
+   *
+   * `allowlist` = ใครสังเกตการณ์สมุดเล่มนี้ได้ (ว่าง = ยังไม่เปิดใช้ ACL, ผ่านหมด)
+   * `secretReaders` = ในจำนวนนั้น ใครอ่านโน้ตชั้นความลับได้อีกชั้นหนึ่ง
+   */
+  setAcl(notebook: string, allowlist: string[], secretReaders: string[]): void {
+    this.ctx.storage.kv.put(`acl:${notebook}`, { allowlist, secretReaders });
+  }
+
+  getAcl(notebook: string): { allowlist: string[]; secretReaders: string[] } {
+    return this.ctx.storage.kv.get<{ allowlist: string[]; secretReaders: string[] }>(
+      `acl:${notebook}`) ?? { allowlist: [], secretReaders: [] };
+  }
+
+  readSecret(notebook: string): string {
+    return this.ctx.storage.kv.get<string>(`secret:${notebook}`) ?? `(สมุด ${notebook} ยังไม่มีโน้ตลับ)`;
+  }
+
+  setSecret(notebook: string, text: string): void {
+    this.ctx.storage.kv.put(`secret:${notebook}`, text);
+  }
 }
 
 function store(ctx: { exports: unknown }): DurableObjectStub<NotesStore> {
@@ -169,8 +194,18 @@ export class NotesAccount
   }
 }
 
+/**
+ * `GatekeeperUserVerifier` ไม่มีเมธอดของตัวเองเลย
+ *
+ * ธรรมเนียมคือ gatekeeper เพิ่มเมธอดนอกมาตรฐานเข้าไปเองแล้วเชื่อคำตอบ เพราะ overseer ส่ง verifier
+ * กลับไปให้เฉพาะ vendor ที่เป็นคนสร้างมันเท่านั้น (ดู doc ของ GatekeeperUserVerifier)
+ */
+export interface NotesVerifierApi extends GatekeeperUserVerifier {
+  identify(): Promise<string>;
+}
+
 export class NotesVerifier
-    extends WorkerEntrypoint<Cloudflare.Env, AccountProps> implements GatekeeperUserVerifier {
+    extends WorkerEntrypoint<Cloudflare.Env, AccountProps> implements NotesVerifierApi {
   async identify(): Promise<string> { return this.ctx.props.label; }
 }
 
@@ -180,6 +215,7 @@ export class NotesVerifier
 export interface NotebookSession extends RpcTarget {
   list(): Promise<string[]>;
   add(text: string): Promise<{ queuedAs: number }>;
+  readRestricted(): Promise<string>;
 }
 
 class NotebookSessionImpl extends RpcTarget implements NotebookSession {
@@ -205,6 +241,26 @@ class NotebookSessionImpl extends RpcTarget implements NotebookSession {
       description: `Read ${notes.length} note(s) from the notebook.`,
     });
     return notes;
+  }
+
+  /**
+   * อ่านโน้ตชั้นความลับ = observation ที่ observer บางคนห้ามเห็น (forward exclusion)
+   *
+   * ตาม docs/observers.md §"Step 5": gatekeeper ตั้ง `excludeObservers` เป็น observer id
+   * ที่ห้ามเห็นข้อมูลก้อนนี้ แล้ว overseer จะ **throw บล็อกการอ่านทั้งดุ้น** ถ้าคนนั้นยังมีสิทธิ์
+   * เข้าถึง gadget อยู่ (เพราะ v1 ยังซ่อนรายเธรดไม่ได้) — จะปล่อยผ่านก็ต่อเมื่อคนนั้นหลุดสิทธิ์ไปแล้ว
+   *
+   * นี่คือคู่ตรงข้ามของ addObserver(): addObserver คุมคนที่มาทีหลังข้อมูล
+   * ส่วน excludeObservers คุมข้อมูลที่มาทีหลังคน
+   */
+  async readRestricted(): Promise<string> {
+    const secret = await this.#gk.readSecret();
+    await this.#queue.authorizeObservation({
+      title: `Read the restricted note in ${this.#gk.notebookName()}`,
+      description: "Read a note that only the notebook's own members may see.",
+      excludeObservers: await this.#gk.observersWithoutSecretAccess(),
+    });
+    return secret;
   }
 
   /**
@@ -283,13 +339,46 @@ export class NotesGatekeeper
     return new NotebookSessionImpl(this, approvalQueue.dup());
   }
 
+  /** โน้ตชั้นความลับของสมุดเล่มนี้ */
+  async readSecret(): Promise<string> {
+    return await store(this.ctx).readSecret(this.notebookName());
+  }
+
   /**
-   * observer verification: ใครก็ดูได้ (แนว "low-stakes" เหมือน spotify)
+   * observer id ที่ "ห้ามเห็น" โน้ตชั้นความลับ
    *
-   * โน้ตปลอมพวกนี้ไม่ใช่ข้อมูลที่ information-flow model มีไว้ปกป้อง จึงไม่ต้องตรวจผู้สังเกตการณ์
+   * ใช้ ACL primitive ตัวเดียวกับ addObserver() ตามที่ docs/observers.md §9.1 แนะนำสำหรับกลยุทธ์ C
    */
-  async addObserver(_id: string, _user: Fetcher<GatekeeperUserVerifier>): Promise<void> {}
-  async removeObserver(_id: string): Promise<void> {}
+  async observersWithoutSecretAccess(): Promise<string[]> {
+    const { secretReaders } = await store(this.ctx).getAcl(this.notebookName());
+    const excluded: string[] = [];
+    for (const [key, label] of this.ctx.storage.kv.list<string>({ prefix: "observer:" })) {
+      if (!secretReaders.includes(label)) excluded.push(key.slice("observer:".length));
+    }
+    return excluded;
+  }
+
+  /**
+   * observer verification แบบ **กลยุทธ์ B (ACL check)** ตาม docs/observers.md §9.1
+   *
+   * ถาม verifier ว่าพูดแทนบัญชีไหน แล้วเทียบกับ ACL ของสมุดเล่มนี้ — ไม่ผ่านก็ throw
+   * ซึ่งเป็นวิธีเดียวที่ gatekeeper ใช้บอกว่า "คนนี้ห้ามเห็นสิ่งที่ gadget อ่านไปแล้ว"
+   *
+   * allowlist ว่าง = ยังไม่ตั้ง ACL = ให้ผ่านหมด (เจ้าของสมุดต้องเปิดใช้เอง)
+   */
+  async addObserver(id: string, user: Fetcher<NotesVerifierApi>): Promise<void> {
+    const label = await user.identify();
+    const { allowlist } = await store(this.ctx).getAcl(this.notebookName());
+    if (allowlist.length > 0 && !allowlist.includes(label)) {
+      throw new Error(`${label} does not have access to notebook ${this.notebookName()}.`);
+    }
+    this.ctx.storage.kv.put(`observer:${id}`, label);
+  }
+
+  /** ต้อง idempotent ตามสัญญาใน docs/observers.md §"Step 7" */
+  async removeObserver(id: string): Promise<void> {
+    this.ctx.storage.kv.delete(`observer:${id}`);
+  }
 
   /** ผู้ใช้กดอนุมัติ -> ถึงตอนนี้ค่อยแตะ "บริการภายนอก" จริง ๆ */
   async applyAction(action: number): Promise<void> {
@@ -311,8 +400,63 @@ export class NotesGatekeeper
   }
 }
 
+// ---------------------------------------------------------------------------
+// Control surface
+//
+// HTTP ธรรมดาบน fetch() ของ worker เอง เทสต์เรียกผ่าน harness.fetchWorker("gatekeeper-notes", ...)
+// ไม่ต้อง gate ด้วย env เพราะ worker ตัวนี้ไม่มีวัน deploy จริง
+//
+// ตรวจ body แทนที่จะเชื่อ ไม่ใช่เพื่อความปลอดภัย แต่เพื่อ failure mode: ถ้าพิมพ์ชื่อ field ผิด
+// แล้วปล่อยผ่าน ACL จะไปตั้งให้สมุดชื่อ `undefined` แล้วเทสต์จะตายอีกหลายขั้นถัดไป
+// โดยไม่บอกสาเหตุจริง
+
+/** 400 ที่บอกว่า field ไหนผิด เพื่อให้คำสั่ง control ที่พิมพ์ผิดพังตรงจุดที่มันผิด */
+function badRequest(problem: string): Response {
+  return new Response(`Bad control request: ${problem}`, { status: 400 });
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(v => typeof v === "string");
+}
+
 export default {
-  async fetch(): Promise<Response> {
+  async fetch(req: Request, _env: Cloudflare.Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(req.url);
+    if (req.method !== "POST") return new Response("Not Found", { status: 404 });
+
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("the body is not JSON");
+    }
+    if (typeof body !== "object" || body === null) {
+      return badRequest("the body is not a JSON object");
+    }
+    const { notebook, allowlist, secretReaders, secret } = body as Record<string, unknown>;
+    if (typeof notebook !== "string" || notebook.length === 0) {
+      return badRequest("`notebook` must be a non-empty string");
+    }
+
+    // ตั้ง ACL ของสมุดหนึ่งเล่ม
+    // Body: {"notebook":"...", "allowlist":["a@x"], "secretReaders":["a@x"]}
+    if (url.pathname === "/control/acl") {
+      if (!isStringArray(allowlist)) return badRequest("`allowlist` must be an array of strings");
+      if (!isStringArray(secretReaders)) {
+        return badRequest("`secretReaders` must be an array of strings");
+      }
+      await store(ctx).setAcl(notebook, allowlist, secretReaders);
+      return new Response(null, { status: 204 });
+    }
+
+    // ใส่เนื้อโน้ตชั้นความลับ
+    // Body: {"notebook":"...", "secret":"..."}
+    if (url.pathname === "/control/secret") {
+      if (typeof secret !== "string") return badRequest("`secret` must be a string");
+      await store(ctx).setSecret(notebook, secret);
+      return new Response(null, { status: 204 });
+    }
+
     return new Response("Not Found", { status: 404 });
   },
 };

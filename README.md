@@ -1,7 +1,7 @@
 # เรียน Cloudflare OS แบบลงมือทำ (ฉบับภาษาไทย)
 
-คู่มือเรียน [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) ภาษาไทย 5 บท
-แบบลงมือทำ พร้อมสคริปต์และ fixture ที่รันได้จริง
+คู่มือเรียน [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) ภาษาไทย แบบลงมือทำ
+บทที่ 0–6 พร้อมสคริปต์และ fixture ที่รันได้จริง
 
 > ⚠️ repo นี้ **ไม่ใช่ของ Cloudflare** และไม่ได้รับการรับรองจาก Cloudflare
 > เป็นบันทึกการเรียนที่เขียนขึ้นเพื่อให้คนอื่นเดินตามได้โดยไม่ต้องลองผิดลองถูกซ้ำ
@@ -43,9 +43,10 @@ git clone https://github.com/monthop-gmail/learning-th-cloudflare-os.git
 | [2](#บทที่-2-blueprint-คือซอร์สโค้ดจริง) | Blueprint คือซอร์สโค้ดจริง | ไม่ | 20 นาที |
 | [3](#บทที่-3-เรียก-api-ของ-gadget-แบบที่-agent-ทำ) | เรียก API ของ Gadget แบบที่ agent ทำ | ไม่ | 20 นาที |
 | [4](#บทที่-4-เขียน-gatekeeper-เองเพื่อเข้าใจ-approval-queue) | เขียน Gatekeeper เองเพื่อเข้าใจ approval queue | ไม่ | 60 นาที |
-| [5](#บทที่-5-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
+| [5](#บทที่-5-observers--ใครมีสิทธิ์-เห็น-สิ่งที่-gadget-อ่านมา) | Observers — ใครมีสิทธิ์เห็นสิ่งที่ Gadget อ่านมา | ไม่ | 45 นาที |
+| [6](#บทที่-6-ไปต่อทางไหน) | ไปต่อทางไหน | — | — |
 
-> 💡 บทที่ 0–4 **ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
+> 💡 บทที่ 0–5 **ไม่ต้องใช้ API key ของ LLM เลย** ตั้งใจออกแบบมาแบบนั้น เพราะส่วนที่น่าเรียนที่สุด
 > ของ repo นี้คือสถาปัตยกรรม ไม่ใช่ตัวโมเดล
 
 ---
@@ -477,17 +478,236 @@ pnpm lint:check                                              # ไม่มี e
 
 ---
 
-## บทที่ 5: ไปต่อทางไหน
+## บทที่ 5: Observers — ใครมีสิทธิ์ "เห็น" สิ่งที่ Gadget อ่านมา
 
-ตอนนี้คุณรู้จัก workpiece / binding / action / observer / blueprint หมดแล้ว พร้อมอ่านของจริง
+บทที่ 4 เราคุมฝั่ง **เขียน** (action ต้องอนุมัติ) บทนี้คุมฝั่ง **อ่าน** ซึ่งยากกว่ามาก
+เพราะข้อมูลที่อ่านเข้ามาแล้วมันไหลต่อไปที่ไหนก็ได้
+
+อ่านคู่กับ [`docs/observers.md`](https://github.com/cloudflare/cloudflare-os/blob/main/docs/observers.md)
+(555 บรรทัด เอกสารยาวสุดใน repo)
+
+### ปัญหา
+
+Cloudflare OS ตั้ง invariant ไว้แบบนี้:
+
+> *"If a Gadget can read information that has restricted access, then any user who is not
+> able to read that information will also be prohibited from interacting with the Gadget,
+> to prevent data leaks."*
+
+พูดง่าย ๆ: **ถ้า gadget ของคุณอ่านข้อมูลลับมา คุณจะแชร์ gadget นั้นให้คนที่ไม่มีสิทธิ์เห็นข้อมูลนั้นไม่ได้**
+
+ของเดิมมีแค่ธง `prohibitAllSharing` ซึ่งหยาบมาก — ตั้งแล้วคือ **ห้ามแชร์กับใครเลย** และ gadget
+ตกเข้าสู่ "lockdown" ทำ action ไม่ได้อีก เอกสารเรียกตัวเองว่า *"a deliberate stopgap"*
+เพราะมันพูดประโยคนี้ไม่ได้: *"ข้อมูลนี้แชร์ได้ แต่เฉพาะกับคนที่เข้าถึงมันได้อยู่แล้ว"*
+
+Observers คือระบบที่มาแทน
+
+### สองกลไกที่เดินคนละทิศ
+
+นี่คือแก่นของทั้งบท ถ้าจับตรงนี้ได้ที่เหลือง่ายหมด:
+
+| กลไก | คุมอะไร | ทำงานตอนไหน |
+|---|---|---|
+| `addObserver()` | **คนที่มาทีหลังข้อมูล** | ตอนเปิด gadget |
+| `excludeObservers` | **ข้อมูลที่มาทีหลังคน** | ตอน `authorizeObservation()` |
+
+```
+เวลา ───────────────────────────────────────────────►
+
+  [gadget อ่านข้อมูลลับ]         [bob ถูกเชิญ]
+            │                          │
+            └──────► addObserver(bob) ─┘
+                     "bob เห็นของที่อ่านไปแล้วทั้งหมดได้ไหม?"
+                     ไม่ได้ -> bob เปิด gadget ไม่ได้
+
+
+  [bob เป็น observer แล้ว]      [gadget จะอ่านข้อมูลลับ]
+            │                          │
+            └── excludeObservers ──────┘
+                "ข้อมูลก้อนนี้ bob ห้ามเห็น"
+                bob ยังมีสิทธิ์อยู่ -> บล็อกการอ่านทั้งดุ้น
+```
+
+### 3 แนวคิดที่ต้องแยกให้ออก
+
+**1. Sharing table ≠ Observer record**
+
+- **sharing table** = *ความตั้งใจ* ของเจ้าของว่าจะให้ใครเข้าถึง
+- **observer record** = คนที่ *ตั้งค่าบัญชีแล้วและผ่านการตรวจของ gatekeeper ทุกตัวแล้ว*
+
+เปิด gadget ได้ต้อง **ผ่านทั้งสองอย่าง** เอกสารเรียกว่า *"intent vs. configured-and-verified"*
+
+**2. Observer ID เป็นสตริงสุ่มแบบ opaque**
+
+จงใจ **ไม่ใช้** `profile.id` (ซึ่งมักเป็นอีเมล) เหตุผลตรงไปตรงมา:
+
+> *"to avoid tempting gatekeeper authors to parse identity out of it — identity is conveyed
+> only via the verifier"*
+
+**3. Verifier — overseer ไม่รู้จัก ACL ของ vendor ไหนเลย**
+
+overseer อ่านไม่ออกว่า Google หรือ GitHub นิยามสิทธิ์ยังไง มันเลยทำแบบนี้แทน:
+
+```
+บัญชีของ bob ──getVerifier()──► verifier (stub ทึบ ๆ)
+                                    │
+                            overseer ส่งต่อให้ ──► gatekeeper ที่ alice ผูกไว้
+                                                        │
+                                              "แกะ" ด้วยเมธอดนอกมาตรฐานที่ตัวเองนิยาม
+                                                        │
+                                              รู้ตัวตนระดับ vendor -> เช็ค ACL เอง
+```
+
+`GatekeeperUserVerifier` **ไม่มีเมธอดเลยสักตัว** — gatekeeper เพิ่มเมธอดของตัวเองเข้าไปแล้วเชื่อคำตอบ
+ปลอดภัยเพราะ overseer ส่ง verifier กลับไปให้เฉพาะ **vendor ที่เป็นคนสร้างมัน** เท่านั้น
+
+### ตรวจแค่ไหน ขึ้นกับ role
+
+| role | ต้องผ่านการตรวจกับ |
+|---|---|
+| `build` (แก้โค้ด + แชท + ทุก binding) | **ทุก gatekeeper** ที่ workspace มี |
+| `use` (เห็นแค่ UI) | เฉพาะ **named binding** เพราะ UI เรียกได้แค่นั้น |
+
+### รันเลย
+
+```bash
+pnpm --filter @gadgets/workshop-backend build:format-blueprints   # ถ้ายังไม่เคยรัน
+pnpm --filter @gadgets/integration-tests exec vitest run __tests__/notes-observers.test.ts
+```
+
+ควรได้ `Tests 3 passed (3)` ใน ~26 วินาที
+
+เทสต์ทั้งสามต่อยอดจาก fixture ของบทที่ 4 โดยเพิ่ม ACL สองชั้นเข้าไป:
+สมุดโน้ตมี `allowlist` (ใครดูสมุดได้) กับ `secretReaders` (ในนั้นใครอ่านโน้ตลับได้อีกชั้น)
+
+### สิ่งที่เทสต์พิสูจน์
+
+**1. `addObserver` ปฏิเสธ → เปิด gadget ไม่ได้**
+
+alice ผูกสมุดที่ ACL มีแค่เธอ แล้วเชิญ bob เป็น `build`
+bob อยู่ใน sharing table แล้ว แต่พอเปิดจริง:
+
+```
+This workspace could not confirm that you are permitted to observe all of the data
+it has accessed:
+Notebook acl-denied (notes-01e9d548@notes.example) — notes-01e9d548@notes.example
+does not have access to notebook acl-denied.
+```
+
+สังเกตว่าข้อความบอกครบสามอย่าง: **ทรัพยากรไหน / บัญชีไหน / เพราะอะไร** ซึ่งจำเป็นมาก
+เพราะสาเหตุที่พบบ่อยที่สุดคือ credential หมดอายุ ไม่ใช่ถูกปฏิเสธจริง ๆ
+
+**2. ใส่ bob ลง allowlist → เปิดได้ปกติ**
+
+เป็น negative control ที่ขาดไม่ได้ ไม่งั้นเทสต์แรกอาจผ่านเพราะ bob เปิดไม่ได้ด้วยเหตุอื่น
+
+**3. `excludeObservers` → บล็อกการอ่าน**
+
+อันนี้คือไฮไลต์ ลำดับเหตุการณ์:
+
+```
+1. ACL: bob ดูสมุดได้ แต่ไม่อยู่ใน secretReaders
+2. ยังไม่มี observer -> alice อ่านโน้ตลับได้ปกติ        ✓
+3. bob เปิด gadget สำเร็จ -> เป็น observer ที่ตรวจแล้ว
+4. alice อ่านโน้ตลับอีกครั้ง -> ถูกบล็อก                ✗
+```
+
+ข้อความที่ได้:
+
+```
+This observation was blocked because it contains data that a current collaborator
+is not permitted to see.
+```
+
+**ตรงกับที่ `docs/observers.md` §5 Step 5 เขียนไว้เป๊ะทุกตัวอักษร** — แผนกับโค้ดตรงกัน
+
+> 🎓 **จุดที่คนงงกันมากที่สุด:** คนที่โดนบล็อกคือ **alice ผู้เป็นเจ้าของ** ไม่ใช่ bob
+>
+> ฟังดูกลับหัว แต่ถูกแล้ว — ระบบกันข้อมูล **ไหลเข้า** gadget ที่ bob มองเห็นอยู่
+> ไม่ได้กัน bob เป็นราย ๆ เพราะ v1 **ยังซ่อนรายเธรดไม่ได้** เอกสารบอกไว้ตรง ๆ ว่า
+> *"v1 is all-or-nothing per observer"*
+>
+> ทางออกของ alice คือถอด bob ออกก่อน แล้วค่อยอ่าน — ซึ่งเป็น trade-off ที่จงใจ
+> ระหว่าง "ปลอดภัยแน่นอน" กับ "ใช้งานสะดวก"
+
+### 5 กลยุทธ์ที่ gatekeeper เลือกได้
+
+เอกสาร §9 วางกรอบไว้ชัดมาก เลือก **ต่อชนิดทรัพยากร** ไม่ใช่ต่อ package
+(package เดียวอาจใช้หลายกลยุทธ์)
+
+| | ชื่อ | `addObserver()` ทำอะไร | ตัวอย่าง |
+|---|---|---|---|
+| **A** | Private-only | throw เสมอ ห้ามคนอื่นดูเด็ดขาด | Gmail, ZoomInfo |
+| **B** | ACL check (หน่วยเดียว) | เช็คสิทธิ์กับทรัพยากรที่ผูกไว้ทั้งก้อน | GitHub repo, Google Doc, Notion page |
+| **C** | Data-set tracking | จดว่าแตะ sub-resource ไหนไปบ้าง แล้วเช็คทุกอัน + ใช้ `excludeObservers` ตอนแตะอันใหม่ | Supabase org, Linear workspace, BigQuery, Confluence |
+| **D** | Low-stakes | no-op ใครดูก็ได้ | Spotify, Home Assistant, Email |
+| **N** | N/A | ไม่มีทรัพยากรให้ผูก | Cloudflare (auth อย่างเดียว) |
+
+fixture ของเราใช้ **B** สำหรับ `addObserver` (เช็ค allowlist ของสมุด) และยืม
+ไอเดีย `excludeObservers` ของ **C** มาสาธิต
+
+### 🎓 "Broad binding lens" — เครื่องมือตัดสินใจที่เอาไปใช้ที่อื่นได้
+
+หลาย gatekeeper มีทั้ง binding กว้าง (ทั้ง workspace) และแคบ (หน้าเดียว)
+binding กว้างควรใช้ **C** ก็ต่อเมื่อ **จริงทั้งสองข้อ**:
+
+1. sub-resource ข้างในมี **ACL ต่างกัน** (ถ้าเหมือนกันหมด ใช้ B พอ)
+2. มี **oracle ตรวจสิทธิ์รายคน** ให้เช็คได้ (ถ้าไม่มี จดไปก็เท่านั้น ตรวจไม่ได้)
+
+ตัวอย่างที่ตกเกณฑ์ — อันนี้แหละที่สอนเยอะที่สุด:
+
+| กรณี | ตกข้อไหน | เลยได้ |
+|---|---|---|
+| **GitHub repo** | ตกข้อ 1 — issue/PR/code สืบสิทธิ์จาก repo เดียวกันหมด | **B** |
+| **Home Assistant** | ตกข้อ 2 — token เป็นแบบ all-or-nothing ไม่มี ACL รายคนให้ถาม | **D** |
+| **Gmail** | ทำได้ในหลักการ แต่จงใจเลื่อนไปก่อน | **A** |
+
+> เกณฑ์สองข้อนี้ใช้ตัดสินใจกับระบบอื่นได้เลย ไม่จำกัดแค่ Cloudflare OS —
+> "ข้างในสิทธิ์ต่างกันไหม" และ "มีที่ให้ถามสิทธิ์รายคนไหม"
+
+### ⚠️ กับดัก
+
+**1. เจ้าของไม่เคยเป็น observer** — `ensureObserver` รันเฉพาะคนที่ไม่ใช่เจ้าของ
+เทสต์แรกจึงต้องให้ alice อ่านผ่านได้ ทั้งที่ ACL "มีแค่ alice"
+
+**2. `addObserver` ถูกเรียก *ทุกครั้ง* ที่เปิด** ไม่ใช่ครั้งเดียวตอนเชิญ
+เป็น re-verification เพราะสิทธิ์ฝั่ง vendor เปลี่ยนได้ตลอด — เอกสารบอกให้ gatekeeper cache เอง
+
+**3. `removeObserver` ต้อง idempotent** เพราะ overseer เรียกแบบ best-effort
+พังกลางคันได้ และมันหายเองรอบหน้า
+
+**4. gatekeeper แยกความต่างระหว่าง "ปฏิเสธ" กับ "credential พัง" ไม่ได้**
+ทั้งคู่มาถึง overseer เป็น exception เหมือนกัน — เป็นดีไซน์ที่จงใจ เพราะ overseer
+ถือว่าทุกความล้มเหลว "ซ่อมได้" แล้วชวนผู้ใช้เลือกบัญชีใหม่ ข้อความเหตุผลคือสิ่งเดียวที่แยกสองกรณีนี้
+ให้ผู้ใช้เข้าใจ **เขียนข้อความให้ดี**
+
+**5. ต้องมี negative control เสมอ** — เทสต์ "ปฏิเสธ" ที่ไม่มีคู่ "อนุญาต" พิสูจน์อะไรไม่ได้เลย
+ตอนเขียนบทนี้ผมเจอเองว่าถ้าไม่ใส่ ก็ไม่รู้ว่าพังเพราะ ACL หรือเพราะ setup ผิด
+
+### 📝 แบบฝึกหัด
+
+1. ลองลบ bob ออกจาก collaborator **ก่อน** ให้ alice อ่านโน้ตลับ — ควรอ่านผ่าน
+   (เอกสาร §5 Step 5 บอกว่าปล่อยผ่านได้ถ้า observer หลุดสิทธิ์ไปแล้ว) ลองดูว่า observer record
+   ถูกลบด้วยไหม
+2. เปลี่ยน `addCollaborator(bob, "build")` เป็น `"use"` แล้วดูว่า `listObserverRequirements()`
+   ตอบต่างกันยังไง
+3. ลองทำกลยุทธ์ **C** เต็มรูปแบบ: ให้สมุดมีหลาย "หมวด" ที่ ACL ต่างกัน จดหมวดที่เคยอ่าน
+   แล้วตรวจ observer กับทุกหมวด
+4. อ่านตารางตัดสินใจใน `docs/observers.md` §9.2 แล้วลองตอบเองก่อนดูเฉลย:
+   ทำไม **Confluence Page** ถึงเป็น C ไม่ใช่ B? (คำใบ้: หน้าลูก)
+
+---
+
+## บทที่ 6: ไปต่อทางไหน
+
+ตอนนี้คุณรู้จัก workpiece / binding / action / observer / blueprint หมดแล้ว พร้อมอ่านเคอร์เนลของจริง
 
 | ลำดับ | เป้าหมาย | ไฟล์ |
 |---|---|---|
-| 1 | Information-flow control — ถ้า gadget อ่านข้อมูลลับมาแล้วคุณแชร์ให้เพื่อน เพื่อนควรเห็นไหม | `docs/observers.md` (555 บรรทัด เอกสารยาวสุดใน repo) |
-| 2 | สัญญากลางของทั้งระบบ | `packages/workshop-shared/src/api.ts` (3,535 บรรทัด) |
-| 3 | **เคอร์เนล** | `packages/workshop-backend/src/overseer.ts` (9,745 บรรทัด) |
-| 4 | agent loop / Code Mode / compaction | `packages/workshop-backend/src/agent.ts` (3,310 บรรทัด) |
-| 5 | Blueprint / sharing | `docs/blueprints.md`, `docs/sharing.md` |
+| 1 | สัญญากลางของทั้งระบบ | `packages/workshop-shared/src/api.ts` (3,535 บรรทัด) |
+| 2 | **เคอร์เนล** | `packages/workshop-backend/src/overseer.ts` (9,745 บรรทัด) |
+| 3 | agent loop / Code Mode / compaction | `packages/workshop-backend/src/agent.ts` (3,310 บรรทัด) |
+| 4 | Blueprint / sharing | `docs/blueprints.md`, `docs/sharing.md` |
 
 **อย่าข้าม `AGENTS.md`** — ยาวเป็นพันบรรทัด อธิบายเหตุผลเชิงสถาปัตยกรรมและ trade-off
 ละเอียดกว่า `README.md` มาก รวมถึงเรื่อง build cache, tsgo single-threaded, release pipeline
@@ -518,6 +738,7 @@ overlay/packages/integration-tests/
   fixtures/gatekeeper-notes/wrangler.jsonc   ← บทที่ 4
   fixtures/gatekeeper-notes/src/notes-gatekeeper.ts
   __tests__/notes-approval.test.ts           ← บทที่ 4
+  __tests__/notes-observers.test.ts          ← บทที่ 5
 ```
 
 ทุกไฟล์เขียนคอมเมนต์ภาษาไทยไว้ อ่านเป็นบทเรียนต่อได้เลย
@@ -549,3 +770,5 @@ overlay/packages/integration-tests/
 4. **Gatekeeper จำลองผลลัพธ์ของ action ที่ยังไม่อนุมัติ** เพื่อไม่ให้ agent ต้องหยุดรอมนุษย์ —
    แต่เป็นความรับผิดชอบของ gatekeeper แต่ละตัว ไม่ได้ฟรี
 5. **เริ่มด้วยสิทธิ์ศูนย์เสมอ** ทั้ง agent และ gadget ต้องถูก "แนะนำ" ให้รู้จักทรัพยากรทีละอย่าง
+6. **ข้อมูลที่อ่านเข้ามาแล้วผูกกับ "ใครเห็น gadget นี้ได้"** — `addObserver()` คุมคนที่มาทีหลังข้อมูล
+   `excludeObservers` คุมข้อมูลที่มาทีหลังคน ทั้งคู่ให้ gatekeeper เป็นเจ้าของคำตัดสินเรื่อง ACL
